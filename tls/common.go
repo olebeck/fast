@@ -270,7 +270,7 @@ type ConnectionState struct {
 	// RequireAndVerifyClientCert.
 	//
 	// PeerCertificates and its contents should not be modified.
-	PeerCertificates []*x509.Certificate
+	//PeerCertificates []*x509.Certificate
 
 	// VerifiedChains is a list of one or more chains where the first element is
 	// PeerCertificates[0] and the last element is from Config.RootCAs (on the
@@ -281,15 +281,15 @@ type ConnectionState struct {
 	// (and the peer provided a certificate) or RequireAndVerifyClientCert.
 	//
 	// VerifiedChains and its contents should not be modified.
-	VerifiedChains [][]*x509.Certificate
+	//VerifiedChains [][]*x509.Certificate
 
 	// SignedCertificateTimestamps is a list of SCTs provided by the peer
 	// through the TLS handshake for the leaf certificate, if any.
-	SignedCertificateTimestamps [][]byte
+	//SignedCertificateTimestamps [][]byte
 
 	// OCSPResponse is a stapled Online Certificate Status Protocol (OCSP)
 	// response provided by the peer for the leaf certificate, if any.
-	OCSPResponse []byte
+	//OCSPResponse []byte
 
 	// TLSUnique contains the "tls-unique" channel binding value (see RFC 5929,
 	// Section 3). This value will be nil for TLS 1.3 connections and for

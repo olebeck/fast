@@ -97,11 +97,13 @@ func Listen(network, laddr string, config *Config) (net.Listener, error) {
 	return NewListener(l, config), nil
 }
 
+/*
 type timeoutError struct{}
 
 func (timeoutError) Error() string   { return "tls: DialWithDialer timed out" }
 func (timeoutError) Timeout() bool   { return true }
 func (timeoutError) Temporary() bool { return true }
+*/
 
 // DialWithDialer connects to the given network address using dialer.Dial and
 // then initiates a TLS handshake, returning the resulting TLS connection. Any

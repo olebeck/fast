@@ -489,8 +489,8 @@ func (hs *serverHandshakeState) checkForResumption() error {
 	}
 
 	//c.peerCertificates = sessionState.peerCertificates
-	c.ocspResponse = sessionState.ocspResponse
-	c.scts = sessionState.scts
+	//c.ocspResponse = sessionState.ocspResponse
+	//c.scts = sessionState.scts
 	//c.verifiedChains = sessionState.verifiedChains
 	c.extMasterSecret = sessionState.extMasterSecret
 	hs.sessionState = sessionState
@@ -856,88 +856,87 @@ func (hs *serverHandshakeState) sendFinished(out []byte) error {
 	return nil
 }
 
+/*
 // processCertsFromClient takes a chain of client certificates either from a
 // Certificates message and verifies them.
 func (c *Conn) processCertsFromClient(certificate Certificate) error {
-	return nil
-	/*
-		certificates := certificate.Certificate
-		certs := make([]*x509.Certificate, len(certificates))
-		var err error
-		for i, asn1Data := range certificates {
-			if certs[i], err = x509.ParseCertificate(asn1Data); err != nil {
+	certificates := certificate.Certificate
+	certs := make([]*x509.Certificate, len(certificates))
+	var err error
+	for i, asn1Data := range certificates {
+		if certs[i], err = x509.ParseCertificate(asn1Data); err != nil {
+			c.sendAlert(alertBadCertificate)
+			return errors.New("tls: failed to parse client certificate: " + err.Error())
+		}
+		if certs[i].PublicKeyAlgorithm == x509.RSA {
+			n := certs[i].PublicKey.(*rsa.PublicKey).N.BitLen()
+			if max, ok := checkKeySize(n); !ok {
 				c.sendAlert(alertBadCertificate)
-				return errors.New("tls: failed to parse client certificate: " + err.Error())
-			}
-			if certs[i].PublicKeyAlgorithm == x509.RSA {
-				n := certs[i].PublicKey.(*rsa.PublicKey).N.BitLen()
-				if max, ok := checkKeySize(n); !ok {
-					c.sendAlert(alertBadCertificate)
-					return fmt.Errorf("tls: client sent certificate containing RSA key larger than %d bits", max)
-				}
+				return fmt.Errorf("tls: client sent certificate containing RSA key larger than %d bits", max)
 			}
 		}
+	}
 
-		if len(certs) == 0 && requiresClientCert(c.config.ClientAuth) {
-			if c.vers == VersionTLS13 {
-				c.sendAlert(alertCertificateRequired)
+	if len(certs) == 0 && requiresClientCert(c.config.ClientAuth) {
+		if c.vers == VersionTLS13 {
+			c.sendAlert(alertCertificateRequired)
+		} else {
+			c.sendAlert(alertBadCertificate)
+		}
+		return errors.New("tls: client didn't provide a certificate")
+	}
+
+	if c.config.ClientAuth >= VerifyClientCertIfGiven && len(certs) > 0 {
+		opts := x509.VerifyOptions{
+			Roots:         c.config.ClientCAs,
+			CurrentTime:   c.config.time(),
+			Intermediates: x509.NewCertPool(),
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		}
+
+		for _, cert := range certs[1:] {
+			opts.Intermediates.AddCert(cert)
+		}
+
+		chains, err := certs[0].Verify(opts)
+		if err != nil {
+			var errCertificateInvalid x509.CertificateInvalidError
+			if errors.As(err, &x509.UnknownAuthorityError{}) {
+				c.sendAlert(alertUnknownCA)
+			} else if errors.As(err, &errCertificateInvalid) && errCertificateInvalid.Reason == x509.Expired {
+				c.sendAlert(alertCertificateExpired)
 			} else {
 				c.sendAlert(alertBadCertificate)
 			}
-			return errors.New("tls: client didn't provide a certificate")
+			return &CertificateVerificationError{UnverifiedCertificates: certs, Err: err}
 		}
 
-		if c.config.ClientAuth >= VerifyClientCertIfGiven && len(certs) > 0 {
-			opts := x509.VerifyOptions{
-				Roots:         c.config.ClientCAs,
-				CurrentTime:   c.config.time(),
-				Intermediates: x509.NewCertPool(),
-				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-			}
+		c.verifiedChains = chains
+	}
 
-			for _, cert := range certs[1:] {
-				opts.Intermediates.AddCert(cert)
-			}
+	c.peerCertificates = certs
+	c.ocspResponse = certificate.OCSPStaple
+	c.scts = certificate.SignedCertificateTimestamps
 
-			chains, err := certs[0].Verify(opts)
-			if err != nil {
-				var errCertificateInvalid x509.CertificateInvalidError
-				if errors.As(err, &x509.UnknownAuthorityError{}) {
-					c.sendAlert(alertUnknownCA)
-				} else if errors.As(err, &errCertificateInvalid) && errCertificateInvalid.Reason == x509.Expired {
-					c.sendAlert(alertCertificateExpired)
-				} else {
-					c.sendAlert(alertBadCertificate)
-				}
-				return &CertificateVerificationError{UnverifiedCertificates: certs, Err: err}
-			}
-
-			c.verifiedChains = chains
+	if len(certs) > 0 {
+		switch certs[0].PublicKey.(type) {
+		case *ecdsa.PublicKey, *rsa.PublicKey, ed25519.PublicKey:
+		default:
+			c.sendAlert(alertUnsupportedCertificate)
+			return fmt.Errorf("tls: client certificate contains an unsupported public key of type %T", certs[0].PublicKey)
 		}
+	}
 
-		c.peerCertificates = certs
-		c.ocspResponse = certificate.OCSPStaple
-		c.scts = certificate.SignedCertificateTimestamps
-
-		if len(certs) > 0 {
-			switch certs[0].PublicKey.(type) {
-			case *ecdsa.PublicKey, *rsa.PublicKey, ed25519.PublicKey:
-			default:
-				c.sendAlert(alertUnsupportedCertificate)
-				return fmt.Errorf("tls: client certificate contains an unsupported public key of type %T", certs[0].PublicKey)
-			}
+	if c.config.VerifyPeerCertificate != nil {
+		if err := c.config.VerifyPeerCertificate(certificates, c.verifiedChains); err != nil {
+			c.sendAlert(alertBadCertificate)
+			return err
 		}
+	}
 
-		if c.config.VerifyPeerCertificate != nil {
-			if err := c.config.VerifyPeerCertificate(certificates, c.verifiedChains); err != nil {
-				c.sendAlert(alertBadCertificate)
-				return err
-			}
-		}
-
-		return nil
-	*/
+	return nil
 }
+*/
 
 func clientHelloInfo(ctx context.Context, c *Conn, clientHello *clientHelloMsg) *ClientHelloInfo {
 	supportedVersions := clientHello.supportedVersions

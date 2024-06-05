@@ -3,6 +3,7 @@ package fast
 import (
 	"errors"
 	"math"
+	"sync"
 	"sync/atomic"
 )
 
@@ -13,6 +14,7 @@ var errNoValues = errors.New("no values")
 
 type MovingAverage struct {
 	Window          int
+	l               sync.RWMutex
 	values          []float64
 	valPos          atomic.Int32
 	slotsFilled     bool
@@ -34,10 +36,12 @@ func (ma *MovingAverage) Avg() float64 {
 	if values == nil {
 		return 0
 	}
+	ma.l.RLock()
 	n := len(values)
 	for _, value := range values {
 		sum += value
 	}
+	ma.l.RUnlock()
 
 	// Finalize average and return
 	avg := sum / float64(n)
@@ -47,6 +51,9 @@ func (ma *MovingAverage) Avg() float64 {
 func (ma *MovingAverage) filledValues() []float64 {
 	var c = ma.Window - 1
 
+	ma.l.RLock()
+	defer ma.l.RUnlock()
+
 	// Are all slots filled? If not, ignore unused
 	if !ma.slotsFilled {
 		c = int(ma.valPos.Load()%int32(ma.Window)) - 1
@@ -55,6 +62,7 @@ func (ma *MovingAverage) filledValues() []float64 {
 			return nil
 		}
 	}
+
 	return ma.values[0 : c+1]
 }
 
@@ -74,12 +82,13 @@ func (ma *MovingAverage) Add(values ...float64) {
 		vp := ma.valPos.Add(1)
 		vpp := int(vp-1) % ma.Window
 		// Put into values array
+		ma.l.Lock()
 		ma.values[vpp] = val
-
 		// Did we just go back to 0, effectively meaning we filled all registers?
 		if !ma.slotsFilled && vpp == 0 {
 			ma.slotsFilled = true
 		}
+		ma.l.Unlock()
 	}
 }
 

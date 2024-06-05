@@ -1319,37 +1319,42 @@ func (m *certificateMsg) unmarshal(data []byte) bool {
 	if len(data) < 7 {
 		return false
 	}
-
-	m.raw = data
-	certsLen := uint32(data[4])<<16 | uint32(data[5])<<8 | uint32(data[6])
-	if uint32(len(data)) != certsLen+7 {
-		return false
-	}
-
-	numCerts := 0
-	d := data[7:]
-	for certsLen > 0 {
-		if len(d) < 4 {
-			return false
-		}
-		certLen := uint32(d[0])<<16 | uint32(d[1])<<8 | uint32(d[2])
-		if uint32(len(d)) < 3+certLen {
-			return false
-		}
-		d = d[3+certLen:]
-		certsLen -= 3 + certLen
-		numCerts++
-	}
-
-	m.certificates = make([][]byte, numCerts)
-	d = data[7:]
-	for i := 0; i < numCerts; i++ {
-		certLen := uint32(d[0])<<16 | uint32(d[1])<<8 | uint32(d[2])
-		m.certificates[i] = d[3 : 3+certLen]
-		d = d[3+certLen:]
-	}
-
 	return true
+	/*
+	   m.raw = data
+	   certsLen := uint32(data[4])<<16 | uint32(data[5])<<8 | uint32(data[6])
+
+	   	if uint32(len(data)) != certsLen+7 {
+	   		return false
+	   	}
+
+	   numCerts := 0
+	   d := data[7:]
+
+	   	for certsLen > 0 {
+	   		if len(d) < 4 {
+	   			return false
+	   		}
+	   		certLen := uint32(d[0])<<16 | uint32(d[1])<<8 | uint32(d[2])
+	   		if uint32(len(d)) < 3+certLen {
+	   			return false
+	   		}
+	   		d = d[3+certLen:]
+	   		certsLen -= 3 + certLen
+	   		numCerts++
+	   	}
+
+	   m.certificates = make([][]byte, numCerts)
+	   d = data[7:]
+
+	   	for i := 0; i < numCerts; i++ {
+	   		certLen := uint32(d[0])<<16 | uint32(d[1])<<8 | uint32(d[2])
+	   		m.certificates[i] = d[3 : 3+certLen]
+	   		d = d[3+certLen:]
+	   	}
+
+	   return true
+	*/
 }
 
 type certificateMsgTLS13 struct {
