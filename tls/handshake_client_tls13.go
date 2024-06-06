@@ -562,12 +562,14 @@ func (hs *clientHandshakeStateTLS13) readServerCertificate() error {
 		c.sendAlert(alertIllegalParameter)
 		return errors.New("tls: certificate used with invalid signature algorithm")
 	}
-	signed := signedMessage(sigHash, serverSignatureContext, hs.transcript)
-	if err := verifyHandshakeSignature(sigType /*c.peerCertificates[0].PublicKey*/, nil,
-		sigHash, signed, certVerify.signature); err != nil {
-		c.sendAlert(alertDecryptError)
-		return errors.New("tls: invalid signature by the server certificate: " + err.Error())
-	}
+	/*
+		signed := signedMessage(sigHash, serverSignatureContext, hs.transcript)
+		if err := verifyHandshakeSignature(sigType, c.peerCertificates[0].PublicKey,
+			sigHash, signed, certVerify.signature); err != nil {
+			c.sendAlert(alertDecryptError)
+			return errors.New("tls: invalid signature by the server certificate: " + err.Error())
+		}
+	*/
 
 	if err := transcriptMsg(certVerify, hs.transcript); err != nil {
 		return err
@@ -622,7 +624,7 @@ func (hs *clientHandshakeStateTLS13) readServerFinished() error {
 		return err
 	}
 
-	c.ekm = hs.suite.exportKeyingMaterial(hs.masterSecret, hs.transcript)
+	//c.ekm = hs.suite.exportKeyingMaterial(hs.masterSecret, hs.transcript)
 
 	return nil
 }

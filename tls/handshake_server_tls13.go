@@ -780,7 +780,7 @@ func (hs *serverHandshakeStateTLS13) sendServerFinished() error {
 		return err
 	}
 
-	c.ekm = hs.suite.exportKeyingMaterial(hs.masterSecret, hs.transcript)
+	//c.ekm = hs.suite.exportKeyingMaterial(hs.masterSecret, hs.transcript)
 
 	// If we did not request client certificates, at this point we can
 	// precompute the client finished and roll the transcript forward to send
@@ -963,12 +963,14 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
 			c.sendAlert(alertIllegalParameter)
 			return errors.New("tls: client certificate used with invalid signature algorithm")
 		}
-		signed := signedMessage(sigHash, clientSignatureContext, hs.transcript)
-		if err := verifyHandshakeSignature(sigType /*c.peerCertificates[0].PublicKey*/, nil,
-			sigHash, signed, certVerify.signature); err != nil {
-			c.sendAlert(alertDecryptError)
-			return errors.New("tls: invalid signature by the client certificate: " + err.Error())
-		}
+		/*
+			signed := signedMessage(sigHash, clientSignatureContext, hs.transcript)
+			if err := verifyHandshakeSignature(sigType, c.peerCertificates[0].PublicKey,
+				sigHash, signed, certVerify.signature); err != nil {
+				c.sendAlert(alertDecryptError)
+				return errors.New("tls: invalid signature by the client certificate: " + err.Error())
+			}
+		*/
 
 		if err := transcriptMsg(certVerify, hs.transcript); err != nil {
 			return err

@@ -64,7 +64,7 @@ type Conn struct {
 	// renegotiation is not supported in that case.)
 	secureRenegotiation bool
 	// ekm is a closure for exporting keying material.
-	ekm func(label string, context []byte, length int) ([]byte, error)
+	//ekm func(label string, context []byte, length int) ([]byte, error)
 	// resumptionSecret is the resumption_master_secret for handling
 	// or sending NewSessionTicket messages.
 	resumptionSecret []byte
@@ -119,6 +119,8 @@ type Conn struct {
 	activeCall atomic.Int32
 
 	tmp [16]byte
+
+	atLeastReader atLeastReader
 }
 
 // Access to net.Conn methods.
@@ -839,7 +841,10 @@ func (c *Conn) readFromUntil(r io.Reader, n int) error {
 	// There might be extra input waiting on the wire. Make a best effort
 	// attempt to fetch it so that it can be used in (*Conn).Read to
 	// "predict" closeNotify alerts.
-	_, err := c.rawInput.ReadFrom(&atLeastReader{r, int64(needs)})
+	c.atLeastReader.R = r
+	c.atLeastReader.N = int64(needs)
+	_, err := c.rawInput.ReadFrom(&c.atLeastReader)
+	c.atLeastReader.R = nil
 	return err
 }
 
@@ -1202,7 +1207,7 @@ var (
 // has not yet completed. See [Conn.SetDeadline], [Conn.SetReadDeadline], and
 // [Conn.SetWriteDeadline].
 func (c *Conn) Write(b []byte) (int, error) {
-	//fmt.Printf("%d\n", size.Of(c))
+	//fmt.Printf("%d %d %d\n", size.Of(c), size.Of(c.conn), fast.Of(c.in))
 	// interlock with Close below
 	for {
 		x := c.activeCall.Load()
@@ -1652,15 +1657,17 @@ func (c *Conn) connectionStateLocked() ConnectionState {
 			state.TLSUnique = c.serverFinished[:]
 		}
 	}
-	if c.config.Renegotiation != RenegotiateNever {
-		state.ekm = noEKMBecauseRenegotiation
-	} else if c.vers != VersionTLS13 && !c.extMasterSecret {
-		state.ekm = func(label string, context []byte, length int) ([]byte, error) {
-			return noEKMBecauseNoEMS(label, context, length)
+	/*
+		if c.config.Renegotiation != RenegotiateNever {
+			state.ekm = noEKMBecauseRenegotiation
+		} else if c.vers != VersionTLS13 && !c.extMasterSecret {
+			state.ekm = func(label string, context []byte, length int) ([]byte, error) {
+				return noEKMBecauseNoEMS(label, context, length)
+			}
+		} else {
+			state.ekm = c.ekm
 		}
-	} else {
-		state.ekm = c.ekm
-	}
+	*/
 	return state
 }
 

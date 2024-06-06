@@ -17,6 +17,7 @@ import (
 	"io"
 )
 
+/*
 // verifyHandshakeSignature verifies a signature against pre-hashed
 // (if required) handshake contents.
 func verifyHandshakeSignature(sigType uint8, pubkey crypto.PublicKey, hashFunc crypto.Hash, signed, sig []byte) error {
@@ -59,6 +60,7 @@ func verifyHandshakeSignature(sigType uint8, pubkey crypto.PublicKey, hashFunc c
 	}
 	return nil
 }
+*/
 
 const (
 	serverSignatureContext = "TLS 1.3, server CertificateVerify\x00"

@@ -297,7 +297,7 @@ type ConnectionState struct {
 	TLSUnique []byte
 
 	// ekm is a closure exposed via ExportKeyingMaterial.
-	ekm func(label string, context []byte, length int) ([]byte, error)
+	//ekm func(label string, context []byte, length int) ([]byte, error)
 }
 
 // ExportKeyingMaterial returns length bytes of exported key material in a new
@@ -310,9 +310,11 @@ type ConnectionState struct {
 // in Go 1.22 due to security issues (see the Security Considerations sections
 // of RFC 5705 and RFC 7627), but can be re-enabled with the GODEBUG setting
 // tlsunsafeekm=1.
+/*
 func (cs *ConnectionState) ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error) {
 	return cs.ekm(label, context, length)
 }
+*/
 
 // ClientAuthType declares the policy the server will follow for
 // TLS Client Authentication.
