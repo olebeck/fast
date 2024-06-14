@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stats</title>
+    <style>
+        .card {
+            border-radius: 8px;
+            background: #2e2e2e;
+            color: whitesmoke;
+            margin: 0.5em;
+            padding: 0.5em;
+        }
+        body {
+            font-family: sans-serif;
+        }
+        .inactive {
+            opacity: 0.75;
+        }
+    </style>
+</head>
+<body>
+    <div class="card" id="totals">
+        <table>
+            <tbody>
+                <tr>
+                    <td>Sessions: </td><td><span style="color: white;">{{.SessionCount}}</span></td>
+                </tr>
+                {{- template "totalstat" .Total}}
+            </tbody>
+        </table>
+    </div>
+    {{- range .Sessions}}
+    <div class="session card {{if .Inactive}}inactive{{end}}">
+        <table>
+            <tbody>
+                {{- template "stats" .}}
+            </tbody>
+        </table>
+    </div>
+    {{- end}}
+
+    <script>
+        // refreshing
+    </script>
+</body>
+</html>
