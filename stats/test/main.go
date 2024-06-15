@@ -29,7 +29,7 @@ func (s SessionStat) Sum(_in any) {
 
 func main() {
 	app := fiber.New()
-	err := statsdb.StatsPage[SessionInfo, SessionStat](app.Group("/stats"), stats_html, totalstats_html)
+	_, err := statsdb.StatsPage[SessionInfo, SessionStat](app.Group("/stats"), stats_html, totalstats_html)
 	if err != nil {
 		logrus.Fatal(err)
 	}

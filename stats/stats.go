@@ -1,6 +1,10 @@
 package stats
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type StatData interface {
 	Sum(Prev any)
@@ -20,13 +24,26 @@ func Total[Tinfo any, Tstat StatData](sessions []*Session[Tinfo, Tstat]) Tstat {
 }
 
 type Stat[Tstat StatData] struct {
-	Time time.Time
-	Data Tstat
+	Time       time.Time
+	FoundCount int
+	Data       Tstat
 }
 
 type Session[Tinfo any, Tstat StatData] struct {
-	ID    string
-	Start time.Time
-	Stats []Stat[Tstat]
-	Info  *Tinfo
+	ID         uuid.UUID
+	Start      time.Time
+	LatestStat time.Time
+	Stats      []Stat[Tstat]
+	Info       *Tinfo
+}
+
+func (s *Session[Tinfo, Tstat]) Inactive() bool {
+	return time.Since(s.LatestStat) > 45*time.Second
+}
+
+func (s *Session[Tinfo, Tstat]) Latest() *Stat[Tstat] {
+	if len(s.Stats) == 0 {
+		return nil
+	}
+	return &s.Stats[0]
 }

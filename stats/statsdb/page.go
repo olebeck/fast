@@ -1,8 +1,10 @@
 package statsdb
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
+	"slices"
 	"testing/fstest"
 	"time"
 
@@ -10,18 +12,18 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/template/html/v2"
+	"github.com/google/uuid"
 	"github.com/olebeck/fast/stats"
-	"github.com/valyala/bytebufferpool"
 	"golang.org/x/text/message"
 )
 
 //go:embed statspage.html
 var statspage_html []byte
 
-func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate, totalStatTemplate []byte) error {
+func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate, totalStatTemplate []byte) (*Stats[Tinfo, Tstat], error) {
 	statsDB, err := NewStats[Tinfo, Tstat]()
 	if err != nil {
-		return fmt.Errorf("init db: %w", err)
+		return nil, fmt.Errorf("init db: %w", err)
 	}
 
 	views := html.NewFileSystem(http.FS(fstest.MapFS{
@@ -70,7 +72,7 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 		if err != nil {
 			return err
 		}
-		err = statsDB.HandleSubmit(&stat)
+		err = statsDB.HandleSubmit(&stat, time.Now())
 		if err != nil {
 			return err
 		}
@@ -82,11 +84,40 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 		if err != nil {
 			return err
 		}
-		sessions, err := statsDB.GetStats(duration)
+		sessions, err := statsDB.GetStats()
 		if err != nil {
 			return err
 		}
-		return c.JSON(sessions)
+
+		total := stats.Total(sessions)
+
+		sessionCount := len(sessions)
+		sessions = slices.DeleteFunc(sessions, func(s *stats.Session[Tinfo, Tstat]) bool {
+			return time.Since(s.LatestStat) > duration
+		})
+
+		return c.JSON(fiber.Map{
+			"SessionCount": sessionCount,
+			"Sessions":     sessions,
+			"Total":        total,
+		})
+	})
+
+	api.Post("/add_found", func(c *fiber.Ctx) error {
+		var FoundCounts map[uuid.UUID]int
+		err := c.BodyParser(&FoundCounts)
+		if err != nil {
+			return err
+		}
+
+		for id, count := range FoundCounts {
+			err := statsDB.AddFound(id, count)
+			if err != nil {
+				return err
+			}
+		}
+
+		return c.SendStatus(200)
 	})
 
 	group.Get("/", func(c *fiber.Ctx) error {
@@ -94,20 +125,19 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 		if err != nil {
 			return err
 		}
-		sessions, err := statsDB.GetStats(duration)
+		sessions, err := statsDB.GetStats()
 		if err != nil {
 			return err
 		}
 
 		total := stats.Total(sessions)
 
-		sessionCount, err := statsDB.SessionCount()
-		if err != nil {
-			return err
-		}
+		sessionCount := len(sessions)
+		sessions = slices.DeleteFunc(sessions, func(s *stats.Session[Tinfo, Tstat]) bool {
+			return time.Since(s.LatestStat) > duration
+		})
 
-		buf := bytebufferpool.Get()
-		defer bytebufferpool.Put(buf)
+		buf := bytes.NewBuffer(nil)
 		err = views.Render(buf, "statspage", fiber.Map{
 			"SessionCount": sessionCount,
 			"Sessions":     sessions,
@@ -120,5 +150,5 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 		return c.Send(buf.Bytes())
 	})
 
-	return nil
+	return statsDB, nil
 }

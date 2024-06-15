@@ -3,18 +3,25 @@ package statsdb
 import (
 	"database/sql"
 	"encoding/json"
+	"slices"
+	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/olebeck/fast/stats"
 )
 
 type Stats[Tinfo any, Tstat stats.StatData] struct {
-	db *sql.DB
+	db       *sql.DB
+	foundAdd map[uuid.UUID]int
+	l        sync.Mutex
 }
 
 func NewStats[Tinfo any, Tstat stats.StatData]() (s *Stats[Tinfo, Tstat], err error) {
-	s = &Stats[Tinfo, Tstat]{}
+	s = &Stats[Tinfo, Tstat]{
+		foundAdd: make(map[uuid.UUID]int),
+	}
 
 	s.db, err = sql.Open("sqlite3", "stats.db?cache=shared")
 	if err != nil {
@@ -27,6 +34,7 @@ func NewStats[Tinfo any, Tstat stats.StatData]() (s *Stats[Tinfo, Tstat], err er
 			id UUID,
 			dt DATETIME,
 			data BLOB,
+			found_count NUMBER DEFAULT 0,
 			PRIMARY KEY(id,dt)
 		) WITHOUT ROWID;
 	`)
@@ -51,59 +59,107 @@ func NewStats[Tinfo any, Tstat stats.StatData]() (s *Stats[Tinfo, Tstat], err er
 }
 
 type StatSubmit[Tstat stats.StatData] struct {
-	SessionID string
+	SessionID uuid.UUID
 	Data      Tstat
 }
 
-func (s *Stats[Tinfo, Tstat]) HandleSubmit(stat *StatSubmit[Tstat]) error {
-	_, err := s.db.Exec(`
-		INSERT INTO stats (id,dt,data) VALUES ($1,$2,$3);
-		UPDATE sessions SET latest_stat = $2;
-	`, stat.SessionID, time.Now(), stat.Data)
+func (s *Stats[Tinfo, Tstat]) HandleSubmit(stat *StatSubmit[Tstat], now time.Time) error {
+	// Start a transaction
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	return nil
+	defer tx.Rollback()
+
+	// Retrieve the last found_count value
+	var lastFoundCount int
+	err = tx.QueryRow(`
+		SELECT found_count
+		FROM stats
+		WHERE id = ?
+		ORDER BY dt DESC
+		LIMIT 1
+	`, stat.SessionID).Scan(&lastFoundCount)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	// Marshal the stat data to JSON
+	statData, err := json.Marshal(stat.Data)
+	if err != nil {
+		return err
+	}
+
+	s.l.Lock()
+	add := s.foundAdd[stat.SessionID]
+	lastFoundCount += add
+	delete(s.foundAdd, stat.SessionID)
+	s.l.Unlock()
+
+	// Insert the new stat entry
+	_, err = tx.Exec(`
+		INSERT INTO stats (id, dt, data, found_count) VALUES (?, ?, ?, ?);
+	`, stat.SessionID, now, statData, lastFoundCount)
+	if err != nil {
+		return err
+	}
+
+	// Update the latest_stat in the sessions table
+	_, err = tx.Exec(`
+		UPDATE sessions SET latest_stat = ? WHERE id = ?;
+	`, now, stat.SessionID)
+	if err != nil {
+		return err
+	}
+
+	// Commit the transaction
+	return tx.Commit()
 }
 
 func (s *Stats[Tinfo, Tstat]) NewSession(session *stats.Session[Tinfo, Tstat]) error {
-	_, err := s.db.Exec(`
+	sessionInfo, err := json.Marshal(session.Info)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.Exec(`
 		INSERT INTO sessions (id, start, info)
 		VALUES ($1,$2,$3);
-	`, session.ID, time.Now(), session.Info)
+	`, session.ID, session.Start, sessionInfo)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *Stats[Tinfo, Tstat]) GetStats(duration time.Duration) ([]*stats.Session[Tinfo, Tstat], error) {
+func (s *Stats[Tinfo, Tstat]) GetStats() ([]*stats.Session[Tinfo, Tstat], error) {
 	var sessions []*stats.Session[Tinfo, Tstat]
 
 	rows, err := s.db.Query(`
-		SELECT s.id, s.start, s.info, st.dt, st.data
+		SELECT s.id, s.start, s.latest_stat, s.info, st.dt, st.data, st.found_count
 		FROM sessions s
 		LEFT JOIN stats st ON s.id = st.id
-		WHERE s.latest_stat > datetime('now', time(?))
 		ORDER BY s.id, st.dt DESC
-	`, duration)
+	`)
 
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var currentID string
+	var currentID uuid.UUID
 	var session *stats.Session[Tinfo, Tstat]
 
 	for rows.Next() {
-		var id string
+		var id uuid.UUID
 		var start time.Time
+		var latest time.Time
 		var infoJSON []byte
 		var statTime sql.NullTime
 		var statData sql.NullString
+		var foundCount int
 
-		err = rows.Scan(&id, &start, &infoJSON, &statTime, &statData)
+		err = rows.Scan(&id, &start, &latest, &infoJSON, &statTime, &statData, &foundCount)
 		if err != nil {
 			return nil, err
 		}
@@ -117,9 +173,10 @@ func (s *Stats[Tinfo, Tstat]) GetStats(duration time.Duration) ([]*stats.Session
 			// New session encountered
 			currentID = id
 			session = &stats.Session[Tinfo, Tstat]{
-				ID:    id,
-				Start: start,
-				Info:  &info,
+				ID:         id,
+				Start:      start,
+				LatestStat: latest,
+				Info:       &info,
 			}
 			sessions = append(sessions, session)
 		}
@@ -130,8 +187,9 @@ func (s *Stats[Tinfo, Tstat]) GetStats(duration time.Duration) ([]*stats.Session
 				return nil, err
 			}
 			session.Stats = append(session.Stats, stats.Stat[Tstat]{
-				Time: statTime.Time,
-				Data: stat,
+				Time:       statTime.Time,
+				FoundCount: foundCount,
+				Data:       stat,
 			})
 		}
 	}
@@ -139,6 +197,17 @@ func (s *Stats[Tinfo, Tstat]) GetStats(duration time.Duration) ([]*stats.Session
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
+	slices.SortFunc(sessions, func(a, b *stats.Session[Tinfo, Tstat]) int {
+		if a.Inactive() != b.Inactive() {
+			if a.Inactive() {
+				return 1
+			} else {
+				return -1
+			}
+		}
+		return -a.Start.Compare(b.Start)
+	})
 
 	return sessions, nil
 }
@@ -154,4 +223,11 @@ func (s *Stats[Tinfo, Tstat]) SessionCount() (int, error) {
 		return 0, err
 	}
 	return val, nil
+}
+
+func (s *Stats[Tinfo, Tstat]) AddFound(id uuid.UUID, count int) error {
+	s.l.Lock()
+	s.foundAdd[id] += count
+	s.l.Unlock()
+	return nil
 }

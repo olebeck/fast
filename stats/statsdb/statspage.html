@@ -32,7 +32,7 @@
         </table>
     </div>
     {{- range .Sessions}}
-    <div class="session card {{if .Inactive}}inactive{{end}}">
+    <div class="session card {{if .Inactive}}inactive{{end}}" data-id="{{.ID}}">
         <table>
             <tbody>
                 {{- template "stats" .}}
