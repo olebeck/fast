@@ -27,11 +27,11 @@ func New(sessionID, statsServer string, StatFunc func() any) *StatsSender {
 
 func (s *StatsSender) Run(ctx context.Context, info any) {
 	body, err := json.Marshal(&struct {
-		SessionID string
-		Info      any
+		ID   string
+		Info any
 	}{
-		SessionID: s.sessionID,
-		Info:      info,
+		ID:   s.sessionID,
+		Info: info,
 	})
 	if err != nil {
 		logrus.Error(err)
