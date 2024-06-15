@@ -85,7 +85,7 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 		if err != nil {
 			return err
 		}
-		sessions, err := statsDB.GetStats()
+		sessions, err := statsDB.GetStats(duration)
 		if err != nil {
 			return err
 		}
@@ -129,7 +129,7 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 		if err != nil {
 			return err
 		}
-		sessions, err := statsDB.GetStats()
+		sessions, err := statsDB.GetStats(duration)
 		if err != nil {
 			return err
 		}

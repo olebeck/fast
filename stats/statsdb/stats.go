@@ -132,15 +132,16 @@ func (s *Stats[Tinfo, Tstat]) NewSession(session *stats.Session[Tinfo, Tstat]) e
 	return nil
 }
 
-func (s *Stats[Tinfo, Tstat]) GetStats() ([]*stats.Session[Tinfo, Tstat], error) {
+func (s *Stats[Tinfo, Tstat]) GetStats(duration time.Duration) ([]*stats.Session[Tinfo, Tstat], error) {
 	var sessions []*stats.Session[Tinfo, Tstat]
 
 	rows, err := s.db.Query(`
 		SELECT s.id, s.start, s.latest_stat, s.info, st.dt, st.data, st.found_count
 		FROM sessions s
 		LEFT JOIN stats st ON s.id = st.id
+		WHERE unixepoch(s.latest_stat) - unixepoch(st.dt) < $1
 		ORDER BY s.id, st.dt DESC
-	`)
+	`, duration.Seconds())
 
 	if err != nil {
 		return nil, err

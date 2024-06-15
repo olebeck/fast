@@ -21,28 +21,155 @@
     </style>
 </head>
 <body>
+    <div id="session-template" style="display: none;">
+        {{- template "stats"}}
+    </div>
+
     <div class="card" id="totals">
         <table>
             <tbody>
                 <tr>
-                    <td>Sessions: </td><td><span style="color: white;">{{.SessionCount}}</span></td>
+                    <td>Sessions: </td><td><span style="color: white;" fmt="num" key="SessionCount"></span></td>
                 </tr>
-                {{- template "totalstat" .Total}}
+                {{- template "totalstat"}}
             </tbody>
         </table>
     </div>
-    {{- range .Sessions}}
-    <div class="session card {{if .Inactive}}inactive{{end}}" data-id="{{.ID}}">
-        <table>
-            <tbody>
-                {{- template "stats" .}}
-            </tbody>
-        </table>
-    </div>
-    {{- end}}
+    <div id="sessions"></div>
 
     <script>
         // refreshing
+        const sessionTemplate = document.querySelector("#session-template");
+        const sessionsDiv = document.querySelector("div#sessions");
+        const totalsDiv = document.querySelector("div#totals");
+
+        const currentURL = new URL(location.href);
+        const queryArgs = new URL(location.href).searchParams;
+        const statsAPI = new URL("stats/api/stats", currentURL);
+        if(queryArgs.has("duration")) {
+            statsAPI.searchParams.set("duration", queryArgs.get("duration"));
+        }
+
+        function createSessionCard(session) {
+            const sessionElement = sessionTemplate.children[0].cloneNode(true);
+            const sessionCard = document.createElement("div");
+            sessionCard.classList.add("session", "card");
+            sessionCard.setAttribute("data-id", session.ID);
+            sessionCard.setAttribute("data-start", session.Start);
+            sessionCard.appendChild(sessionElement);
+            return sessionCard;
+        }
+
+        function applyField(card, key, obj) {
+            const value = obj[key];
+            for(const elem of card.querySelectorAll(`*[key="${key}"]`)) {
+                const condition = elem.parentElement.getAttribute("if");
+                if(condition) {
+                    if(!eval(`"use strict";!!(${condition})`)) {
+                        elem.parentElement.style.display = "none";
+                        continue;
+                    } else {
+                        elem.parentElement.style.display = "";
+                    }
+                }
+
+                const fmt = elem.getAttribute("fmt");
+                switch(fmt) {
+                case "num":
+                    elem.textContent = value.toLocaleString();
+                    break;
+                case "rate":
+                    const startKey = elem.getAttribute("Start");
+                    const timeDiff = (new Date() - new Date(obj[startKey])) / 1000;
+                    elem.textContent = String(Math.round(Number(value)/timeDiff));
+                    break;
+                default:
+                    elem.textContent = String(value);
+                    break;
+                }
+                console.log(key, elem.textContent);
+            }
+        }
+
+        /**
+            @argument sessionCard {HTMLDivElement} 
+        */
+        function updateSessionData(sessionCard, session) {
+            if(session.Stats.length == 0) {
+                return
+            }
+            sessionCard.setAttribute("latest-data", session.LatestStat);
+            if(new Date() - new Date(session.LatestStat) > 45*1000) {
+                sessionCard.classList.add("inactive");
+            } else {
+                sessionCard.classList.remove("inactive");
+            }
+
+            const latest = Object.assign({},
+                session.Stats[0].Data,
+                {
+                    FoundCount: session.Stats[0].FoundCount,
+                    Time: session.Stats[0].Time,
+                    Start: session.Start
+                },
+                session.Info
+            );
+
+            for(const key in latest) {
+                applyField(sessionCard, key, latest);
+            }
+        }
+
+        function sortSessions() {
+            const elements = Array.from(sessionsDiv.children);
+
+            elements.sort((a, b) => {
+                const dateA = new Date(a.getAttribute('data-start'));
+                const dateB = new Date(b.getAttribute('data-start'));
+                const inactiveA = a.classList.contains('inactive');
+                const inactiveB = b.classList.contains('inactive');
+
+                if(inactiveA != inactiveB) {
+                    return inactiveA ? 1 : -1;
+                }
+
+                // Sort by date (latest first)
+                if (dateA > dateB) return -1;
+                if (dateA < dateB) return 1;
+                return 0;
+            });
+
+            elements.forEach(element => sessionsDiv.appendChild(element));
+        }
+
+        function updateTotals(statsData) {
+            applyField(totalsDiv, "SessionCount", statsData);
+            for(const key in statsData.Total) {
+                applyField(totalsDiv, key, statsData.Total);
+            }
+        }
+
+        async function refreshSessions() {
+            const statsData = await (await fetch(statsAPI)).json();
+            updateTotals(statsData);
+
+            for(const session of statsData.Sessions) {
+                let sessionCard = document.querySelector(`*[data-id="${session.ID}"`);
+                if(!sessionCard) { // create new element
+                    sessionCard = createSessionCard(session);
+                }
+                updateSessionData(sessionCard, session);
+
+                if(!sessionsDiv.contains(sessionCard)) {
+                    sessionsDiv.appendChild(sessionCard);
+                }
+            }
+
+            sortSessions();
+        }
+
+        setInterval(refreshSessions, 15000);
+        refreshSessions();
     </script>
 </body>
 </html>
