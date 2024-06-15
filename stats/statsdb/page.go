@@ -81,7 +81,7 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 	})
 
 	api.Get("/stats", func(c *fiber.Ctx) error {
-		duration, err := time.ParseDuration(c.Query("duration", "12h"))
+		duration, err := time.ParseDuration(c.Query("duration", "2h"))
 		if err != nil {
 			return err
 		}
@@ -125,7 +125,7 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 	})
 
 	group.Get("/", func(c *fiber.Ctx) error {
-		duration, err := time.ParseDuration(c.Query("duration", "12h"))
+		duration, err := time.ParseDuration(c.Query("duration", "2h"))
 		if err != nil {
 			return err
 		}
@@ -146,9 +146,11 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 
 		buf := bytes.NewBuffer(nil)
 		err = views.Render(buf, "statspage", fiber.Map{
-			"SessionCount": sessionCount,
-			"Sessions":     sessions,
-			"Total":        total,
+			"StatsDataInit": fiber.Map{
+				"SessionCount": sessionCount,
+				"Sessions":     sessions,
+				"Total":        total,
+			},
 		})
 		if err != nil {
 			return err

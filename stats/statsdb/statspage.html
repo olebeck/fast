@@ -18,7 +18,11 @@
         .inactive {
             opacity: 0.75;
         }
+        th {
+            text-align: left;
+        }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <div id="session-template" style="display: none;">
@@ -37,17 +41,31 @@
     </div>
     <div id="sessions"></div>
 
+    <script type="application/json" id="StatsDataInit">{{.StatsDataInit}}</script>
     <script>
         // refreshing
         const sessionTemplate = document.querySelector("#session-template");
         const sessionsDiv = document.querySelector("div#sessions");
         const totalsDiv = document.querySelector("div#totals");
+        const StatsDataInit = JSON.parse(document.querySelector("#StatsDataInit").textContent);
 
         const currentURL = new URL(location.href);
         const queryArgs = new URL(location.href).searchParams;
         const statsAPI = new URL("stats/api/stats", currentURL);
         if(queryArgs.has("duration")) {
             statsAPI.searchParams.set("duration", queryArgs.get("duration"));
+        }
+
+        function formatDuration(ms) {
+            if (ms < 1000) {
+                return `${ms}ms`;
+            } else if (ms < 60000) {
+                return `${(ms / 1000).toFixed(1)}s`;
+            } else {
+                const minutes = Math.floor(ms / 60000);
+                const seconds = ((ms % 60000) / 1000).toFixed(1);
+                return seconds === '0.0' ? `${minutes}m` : `${minutes}m${seconds}s`;
+            }
         }
 
         function createSessionCard(session) {
@@ -58,6 +76,21 @@
             sessionCard.setAttribute("data-start", session.Start);
             sessionCard.appendChild(sessionElement);
             return sessionCard;
+        }
+
+        function formatValue(value, fmt, opt = {}, forChart = false, startKey = null) {
+            switch(fmt) {
+                case "duration":
+                    return formatDuration(Number(value/1000000));
+                case "num":
+                    return forChart ? value : value.toLocaleString();
+                case "rate":
+                    const timeDiff = (new Date() - new Date(opt[startKey])) / 1000;
+                    return Math.round(Number(value)/timeDiff);
+                default:
+                    return value;
+                    break;
+                }
         }
 
         function applyField(card, key, obj) {
@@ -74,19 +107,8 @@
                 }
 
                 const fmt = elem.getAttribute("fmt");
-                switch(fmt) {
-                case "num":
-                    elem.textContent = value.toLocaleString();
-                    break;
-                case "rate":
-                    const startKey = elem.getAttribute("Start");
-                    const timeDiff = (new Date() - new Date(obj[startKey])) / 1000;
-                    elem.textContent = String(Math.round(Number(value)/timeDiff));
-                    break;
-                default:
-                    elem.textContent = String(value);
-                    break;
-                }
+                const startKey = elem.getAttribute("Start");
+                elem.textContent = formatValue(value, fmt, obj, false, startKey);
                 console.log(key, elem.textContent);
             }
         }
@@ -118,28 +140,137 @@
             for(const key in latest) {
                 applyField(sessionCard, key, latest);
             }
+
+            const chartElem = sessionCard.querySelector("canvas.chart");
+            if(chartElem) {
+                let chart = chartElem.chartjs;
+                if(!chart) {
+                    chart = chartElem.chartjs = new Chart(chartElem, {
+                        type: "line",
+                        data: {
+                            labels: [],
+                            datasets: []
+                        },
+                        options: {
+                            interaction: {
+                                intersect: false,
+                                mode: 'index',
+                            },
+                            maintainAspectRatio: false,
+                            scales: {
+                              x: {
+                                grid: {
+                                    display: false
+                                },
+                                ticks: {
+                                    display: false
+                                },
+                             },
+                             y: {
+                                grid: {
+                                    display: false
+                                },
+                                ticks: {
+                                    display: false
+                                }
+                             },
+                             y2: {
+                                grid: {
+                                    display: false
+                                },
+                                ticks: {
+                                    display: false
+                                }
+                             }
+                           }
+                         }
+                    });
+                    chartElem.types = JSON.parse(chartElem.querySelector("script#types").textContent);
+                }
+
+                updateChartData(chart, session, chartElem.types);
+            }
+        }
+
+        function updateChartData(chart, session, types) {
+            const stats = [...session.Stats].reverse();
+            chart.data.labels = stats.map(stat => stat.Time).slice(1);
+
+            for(const i in types) {
+                const [key, fmt, color, yaxis] = types[i];
+                if(chart.data.datasets.length <= i) {
+                    chart.data.datasets.push({
+                        axis: "x",
+                        yAxisID: yaxis,
+                        label: key,
+                        data: [],
+                        fill: false,
+                        borderColor: color,
+                        pointStyle: false,
+                    });
+                }
+                const dataset = chart.data.datasets[i];
+
+                /** @type {Array} */
+                let values = stats.map(stat => {
+                    if(key == "FoundCount") {
+                        return stat.FoundCount;
+                    }
+                    return stat.Data[key];
+                }).map((value, index, arr) => {
+                    switch(fmt) {
+                        case "duration":
+                            return value/1000000;
+                        case "inc":
+                            if(index == 0) return 0;
+                            return value-arr[index-1];
+                        case "num":
+                        default:
+                            return value;
+                    }
+                }).map(value => {
+                    if(value == 0) return null;
+                    return value;
+                });
+
+                dataset.data = values.slice(1);
+            }
+            chart.update();
         }
 
         function sortSessions() {
             const elements = Array.from(sessionsDiv.children);
-
-            elements.sort((a, b) => {
+    
+            // Create an array of sorted elements based on the existing logic
+            const sortedElements = [...elements].sort((a, b) => {
                 const dateA = new Date(a.getAttribute('data-start'));
                 const dateB = new Date(b.getAttribute('data-start'));
                 const inactiveA = a.classList.contains('inactive');
                 const inactiveB = b.classList.contains('inactive');
-
-                if(inactiveA != inactiveB) {
+        
+                if (inactiveA != inactiveB) {
                     return inactiveA ? 1 : -1;
                 }
-
+        
                 // Sort by date (latest first)
                 if (dateA > dateB) return -1;
                 if (dateA < dateB) return 1;
                 return 0;
             });
-
-            elements.forEach(element => sessionsDiv.appendChild(element));
+        
+            // Compare the original order with the sorted order
+            let isSorted = true;
+            for (let i = 0; i < elements.length; i++) {
+                if (elements[i] !== sortedElements[i]) {
+                    isSorted = false;
+                    break;
+                }
+            }
+        
+            // Only update the DOM if the elements are not sorted
+            if (!isSorted) {
+                sortedElements.forEach(element => sessionsDiv.appendChild(element));
+            }
         }
 
         function updateTotals(statsData) {
@@ -149,8 +280,10 @@
             }
         }
 
-        async function refreshSessions() {
-            const statsData = await (await fetch(statsAPI)).json();
+        async function refreshSessions(statsData = null) {
+            if(!statsData) {
+                statsData = await (await fetch(statsAPI)).json();
+            }
             updateTotals(statsData);
 
             for(const session of statsData.Sessions) {
@@ -169,7 +302,7 @@
         }
 
         setInterval(refreshSessions, 15000);
-        refreshSessions();
+        refreshSessions(StatsDataInit);
     </script>
 </body>
 </html>
