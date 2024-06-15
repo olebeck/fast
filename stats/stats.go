@@ -32,13 +32,16 @@ type Stat[Tstat StatData] struct {
 type Session[Tinfo any, Tstat StatData] struct {
 	ID         uuid.UUID
 	Start      time.Time
-	LatestStat time.Time
+	LatestStat *time.Time
 	Stats      []Stat[Tstat]
 	Info       *Tinfo
 }
 
 func (s *Session[Tinfo, Tstat]) Inactive() bool {
-	return time.Since(s.LatestStat) > 45*time.Second
+	if s.LatestStat == nil {
+		return time.Since(s.Start) > 45*time.Second
+	}
+	return time.Since(*s.LatestStat) > 45*time.Second
 }
 
 func (s *Session[Tinfo, Tstat]) Latest() *Stat[Tstat] {

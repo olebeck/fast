@@ -59,6 +59,7 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 		if err != nil {
 			return err
 		}
+		session.Start = time.Now()
 		err = statsDB.NewSession(&session)
 		if err != nil {
 			return err
@@ -93,7 +94,10 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 
 		sessionCount := len(sessions)
 		sessions = slices.DeleteFunc(sessions, func(s *stats.Session[Tinfo, Tstat]) bool {
-			return time.Since(s.LatestStat) > duration
+			if s.LatestStat == nil {
+				return false
+			}
+			return time.Since(*s.LatestStat) > duration
 		})
 
 		return c.JSON(fiber.Map{
@@ -134,7 +138,10 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 
 		sessionCount := len(sessions)
 		sessions = slices.DeleteFunc(sessions, func(s *stats.Session[Tinfo, Tstat]) bool {
-			return time.Since(s.LatestStat) > duration
+			if s.LatestStat == nil {
+				return time.Since(s.Start) > duration
+			}
+			return time.Since(*s.LatestStat) > duration
 		})
 
 		buf := bytes.NewBuffer(nil)

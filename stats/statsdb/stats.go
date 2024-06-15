@@ -72,7 +72,7 @@ func (s *Stats[Tinfo, Tstat]) HandleSubmit(stat *StatSubmit[Tstat], now time.Tim
 	defer tx.Rollback()
 
 	// Retrieve the last found_count value
-	var lastFoundCount int
+	var lastFoundCount sql.NullInt64
 	err = tx.QueryRow(`
 		SELECT found_count
 		FROM stats
@@ -92,14 +92,14 @@ func (s *Stats[Tinfo, Tstat]) HandleSubmit(stat *StatSubmit[Tstat], now time.Tim
 
 	s.l.Lock()
 	add := s.foundAdd[stat.SessionID]
-	lastFoundCount += add
+	lastFoundCount.Int64 += int64(add)
 	delete(s.foundAdd, stat.SessionID)
 	s.l.Unlock()
 
 	// Insert the new stat entry
 	_, err = tx.Exec(`
 		INSERT INTO stats (id, dt, data, found_count) VALUES (?, ?, ?, ?);
-	`, stat.SessionID, now, statData, lastFoundCount)
+	`, stat.SessionID, now, statData, lastFoundCount.Int64)
 	if err != nil {
 		return err
 	}
@@ -153,11 +153,11 @@ func (s *Stats[Tinfo, Tstat]) GetStats() ([]*stats.Session[Tinfo, Tstat], error)
 	for rows.Next() {
 		var id uuid.UUID
 		var start time.Time
-		var latest time.Time
+		var latest sql.NullTime
 		var infoJSON []byte
 		var statTime sql.NullTime
 		var statData sql.NullString
-		var foundCount int
+		var foundCount sql.NullInt64
 
 		err = rows.Scan(&id, &start, &latest, &infoJSON, &statTime, &statData, &foundCount)
 		if err != nil {
@@ -172,10 +172,14 @@ func (s *Stats[Tinfo, Tstat]) GetStats() ([]*stats.Session[Tinfo, Tstat], error)
 		if currentID != id {
 			// New session encountered
 			currentID = id
+			var LatestStat *time.Time
+			if latest.Valid {
+				LatestStat = &latest.Time
+			}
 			session = &stats.Session[Tinfo, Tstat]{
 				ID:         id,
 				Start:      start,
-				LatestStat: latest,
+				LatestStat: LatestStat,
 				Info:       &info,
 			}
 			sessions = append(sessions, session)
@@ -188,7 +192,7 @@ func (s *Stats[Tinfo, Tstat]) GetStats() ([]*stats.Session[Tinfo, Tstat], error)
 			}
 			session.Stats = append(session.Stats, stats.Stat[Tstat]{
 				Time:       statTime.Time,
-				FoundCount: foundCount,
+				FoundCount: int(foundCount.Int64),
 				Data:       stat,
 			})
 		}
