@@ -9,18 +9,13 @@ import (
 	"container/list"
 	"context"
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha512"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync"
 	"time"
 )
@@ -547,7 +542,7 @@ type Config struct {
 	// Note: if there are multiple Certificates, and they don't have the
 	// optional field Leaf set, certificate selection will incur a significant
 	// per-handshake performance cost.
-	Certificates []Certificate
+	//Certificates []Certificate
 
 	// NameToCertificate maps from a certificate name to an element of
 	// Certificates. Note that a certificate name can be of the form
@@ -556,7 +551,7 @@ type Config struct {
 	// Deprecated: NameToCertificate only allows associating a single
 	// certificate with a given name. Leave this field nil to let the library
 	// select the first compatible chain from Certificates.
-	NameToCertificate map[string]*Certificate
+	//NameToCertificate map[string]*Certificate
 
 	// GetCertificate returns a Certificate based on the given
 	// ClientHelloInfo. It will only be called if the client supplies SNI
@@ -567,7 +562,7 @@ type Config struct {
 	// best element of Certificates will be used.
 	//
 	// Once a Certificate is returned it should not be modified.
-	GetCertificate func(*ClientHelloInfo) (*Certificate, error)
+	//GetCertificate func(*ClientHelloInfo) (*Certificate, error)
 
 	// GetClientCertificate, if not nil, is called when a server requests a
 	// certificate from a client. If set, the contents of Certificates will
@@ -584,7 +579,7 @@ type Config struct {
 	// connection if renegotiation occurs or if TLS 1.3 is in use.
 	//
 	// Once a Certificate is returned it should not be modified.
-	GetClientCertificate func(*CertificateRequestInfo) (*Certificate, error)
+	//GetClientCertificate func(*CertificateRequestInfo) (*Certificate, error)
 
 	// GetConfigForClient, if not nil, is called after a ClientHello is
 	// received from a client. It may return a non-nil Config in order to
@@ -620,7 +615,7 @@ type Config struct {
 	// not re-verified on resumption.
 	//
 	// verifiedChains and its contents should not be modified.
-	VerifyPeerCertificate func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error
+	//VerifyPeerCertificate func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error
 
 	// VerifyConnection, if not nil, is called after normal certificate
 	// verification and after VerifyPeerCertificate by either a TLS client
@@ -631,12 +626,12 @@ type Config struct {
 	// considering this callback. This callback will run for all connections,
 	// including resumptions, regardless of InsecureSkipVerify or ClientAuth
 	// settings.
-	VerifyConnection func(ConnectionState) error
+	//VerifyConnection func(ConnectionState) error
 
 	// RootCAs defines the set of root certificate authorities
 	// that clients use when verifying server certificates.
 	// If RootCAs is nil, TLS uses the host's root CA set.
-	RootCAs *x509.CertPool
+	//RootCAs *x509.CertPool
 
 	// NextProtos is a list of supported application level protocols, in
 	// order of preference. If both peers support ALPN, the selected
@@ -659,7 +654,7 @@ type Config struct {
 	// ClientCAs defines the set of root certificate authorities
 	// that servers use if required to verify a client certificate
 	// by the policy in ClientAuth.
-	ClientCAs *x509.CertPool
+	//ClientCAs *x509.CertPool
 
 	// InsecureSkipVerify controls whether a client verifies the server's
 	// certificate chain and host name. If InsecureSkipVerify is true, crypto/tls
@@ -834,20 +829,20 @@ func (c *Config) Clone() *Config {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 	return &Config{
-		Rand:                        c.Rand,
-		Time:                        c.Time,
-		Certificates:                c.Certificates,
-		NameToCertificate:           c.NameToCertificate,
-		GetCertificate:              c.GetCertificate,
-		GetClientCertificate:        c.GetClientCertificate,
-		GetConfigForClient:          c.GetConfigForClient,
-		VerifyPeerCertificate:       c.VerifyPeerCertificate,
-		VerifyConnection:            c.VerifyConnection,
-		RootCAs:                     c.RootCAs,
-		NextProtos:                  c.NextProtos,
-		ServerName:                  c.ServerName,
-		ClientAuth:                  c.ClientAuth,
-		ClientCAs:                   c.ClientCAs,
+		Rand: c.Rand,
+		Time: c.Time,
+		//Certificates:         c.Certificates,
+		//NameToCertificate:    c.NameToCertificate,
+		//GetCertificate:       c.GetCertificate,
+		//GetClientCertificate: c.GetClientCertificate,
+		GetConfigForClient: c.GetConfigForClient,
+		//VerifyPeerCertificate:       c.VerifyPeerCertificate,
+		//VerifyConnection:            c.VerifyConnection,
+		//RootCAs:                     c.RootCAs,
+		NextProtos: c.NextProtos,
+		ServerName: c.ServerName,
+		ClientAuth: c.ClientAuth,
+		//ClientCAs:                   c.ClientCAs,
 		InsecureSkipVerify:          c.InsecureSkipVerify,
 		CipherSuites:                c.CipherSuites,
 		PreferServerCipherSuites:    c.PreferServerCipherSuites,
@@ -1114,6 +1109,7 @@ var errNoCertificates = errors.New("tls: no certificates configured")
 
 // getCertificate returns the best certificate for the given ClientHelloInfo,
 // defaulting to the first element of c.Certificates.
+/*
 func (c *Config) getCertificate(clientHello *ClientHelloInfo) (*Certificate, error) {
 	if c.GetCertificate != nil &&
 		(len(c.Certificates) == 0 || len(clientHello.ServerName) > 0) {
@@ -1156,6 +1152,7 @@ func (c *Config) getCertificate(clientHello *ClientHelloInfo) (*Certificate, err
 	// If nothing matches, return the first certificate.
 	return &c.Certificates[0], nil
 }
+*/
 
 // SupportsCertificate returns nil if the provided certificate is supported by
 // the client that sent the ClientHello. Otherwise, it returns an error
@@ -1168,6 +1165,7 @@ func (c *Config) getCertificate(clientHello *ClientHelloInfo) (*Certificate, err
 //
 // This function will call x509.ParseCertificate unless c.Leaf is set, which can
 // incur a significant performance cost.
+/*
 func (chi *ClientHelloInfo) SupportsCertificate(c *Certificate) error {
 	// Note we don't currently support certificate_authorities nor
 	// signature_algorithms_cert, and don't check the algorithms of the
@@ -1375,6 +1373,7 @@ func (c *Config) BuildNameToCertificate() {
 		}
 	}
 }
+*/
 
 const (
 	keyLogLabelTLS12           = "CLIENT_RANDOM"
@@ -1403,6 +1402,7 @@ func (c *Config) writeKeyLog(label string, clientRandom, secret []byte) error {
 var writerMutex sync.Mutex
 
 // A Certificate is a chain of one or more certificates, leaf first.
+
 type Certificate struct {
 	Certificate [][]byte
 	// PrivateKey contains the private key corresponding to the public key in

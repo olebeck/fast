@@ -27,9 +27,11 @@ func init() {
 }
 
 func StartPprof() {
+	addr := "127.0.0.1"
+
 	go func() {
 		for port := 6060; port < 7000; port++ {
-			listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+			listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", addr, port))
 			if err != nil {
 				continue
 			}

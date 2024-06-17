@@ -7,9 +7,7 @@ package tls
 import (
 	"bytes"
 	"context"
-	"crypto"
 	"crypto/ecdh"
-	"crypto/rsa"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -324,20 +322,22 @@ func (c *Conn) loadSession(hello *clientHelloMsg) (
 	// Check that the cached server certificate is not expired, and that it's
 	// valid for the ServerName. This should be ensured by the cache key, but
 	// protect the application from a faulty ClientSessionCache implementation.
-	if c.config.time().After(session.peerCertificates[0].NotAfter) {
-		// Expired certificate, delete the entry.
-		c.config.ClientSessionCache.Put(cacheKey, nil)
-		return nil, nil, nil, nil
-	}
-	if !c.config.InsecureSkipVerify {
-		if len(session.verifiedChains) == 0 {
-			// The original connection had InsecureSkipVerify, while this doesn't.
+	/*
+		if c.config.time().After(session.peerCertificates[0].NotAfter) {
+			// Expired certificate, delete the entry.
+			c.config.ClientSessionCache.Put(cacheKey, nil)
 			return nil, nil, nil, nil
 		}
-		if err := session.peerCertificates[0].VerifyHostname(c.config.ServerName); err != nil {
-			return nil, nil, nil, nil
+		if !c.config.InsecureSkipVerify {
+			if len(session.verifiedChains) == 0 {
+				// The original connection had InsecureSkipVerify, while this doesn't.
+				return nil, nil, nil, nil
+			}
+			if err := session.peerCertificates[0].VerifyHostname(c.config.ServerName); err != nil {
+				return nil, nil, nil, nil
+			}
 		}
-	}
+	*/
 
 	if session.version != VersionTLS13 {
 		// In TLS 1.2 the cipher suite must match the resumed session. Ensure we
@@ -451,7 +451,7 @@ func (hs *clientHandshakeState) handshake() error {
 	// Otherwise, in a full handshake, if we don't have any certificates
 	// configured then we will never send a CertificateVerify message and
 	// thus no signatures are needed in that case either.
-	if isResume || (len(c.config.Certificates) == 0 && c.config.GetClientCertificate == nil) {
+	if isResume || /*(len(c.config.Certificates) == 0 && c.config.GetClientCertificate == nil)*/ true {
 		hs.finishedHash.discardHandshakeBuffer()
 	}
 
@@ -478,12 +478,14 @@ func (hs *clientHandshakeState) handshake() error {
 		// Make sure the connection is still being verified whether or not this
 		// is a resumption. Resumptions currently don't reverify certificates so
 		// they don't call verifyServerCertificate. See Issue 31641.
-		if c.config.VerifyConnection != nil {
-			if err := c.config.VerifyConnection(c.connectionStateLocked()); err != nil {
-				c.sendAlert(alertBadCertificate)
-				return err
+		/*
+			if c.config.VerifyConnection != nil {
+				if err := c.config.VerifyConnection(c.connectionStateLocked()); err != nil {
+					c.sendAlert(alertBadCertificate)
+					return err
+				}
 			}
-		}
+		*/
 		if err := hs.sendFinished(c.clientFinished[:]); err != nil {
 			return err
 		}
@@ -608,22 +610,25 @@ func (hs *clientHandshakeState) doFullHandshake() error {
 		}
 	}
 
-	var chainToSend *Certificate
-	var certRequested bool
-	certReq, ok := msg.(*certificateRequestMsg)
+	//var chainToSend *Certificate
+	//var certRequested bool
+	_, ok = msg.(*certificateRequestMsg)
 	if ok {
-		certRequested = true
+		//certRequested = true
+		c.sendAlert(alertInternalError)
+		return errors.New("dont support client certs")
+		/*
+			cri := certificateRequestInfoFromMsg(hs.ctx, c.vers, certReq)
+			if chainToSend, err = c.getClientCertificate(cri); err != nil {
+				c.sendAlert(alertInternalError)
+				return err
+			}
 
-		cri := certificateRequestInfoFromMsg(hs.ctx, c.vers, certReq)
-		if chainToSend, err = c.getClientCertificate(cri); err != nil {
-			c.sendAlert(alertInternalError)
-			return err
-		}
-
-		msg, err = c.readHandshake(&hs.finishedHash)
-		if err != nil {
-			return err
-		}
+			msg, err = c.readHandshake(&hs.finishedHash)
+			if err != nil {
+				return err
+			}
+		*/
 	}
 
 	shd, ok := msg.(*serverHelloDoneMsg)
@@ -635,13 +640,15 @@ func (hs *clientHandshakeState) doFullHandshake() error {
 	// If the server requested a certificate then we have to send a
 	// Certificate message, even if it's empty because we don't have a
 	// certificate to send.
-	if certRequested {
-		certMsg = new(certificateMsg)
-		certMsg.certificates = chainToSend.Certificate
-		if _, err := hs.c.writeHandshakeRecord(certMsg, &hs.finishedHash); err != nil {
-			return err
+	/*
+		if certRequested {
+			certMsg = new(certificateMsg)
+			certMsg.certificates = chainToSend.Certificate
+			if _, err := hs.c.writeHandshakeRecord(certMsg, &hs.finishedHash); err != nil {
+				return err
+			}
 		}
-	}
+	*/
 
 	preMasterSecret, ckx, err := keyAgreement.generateClientKeyExchange(c.config, hs.hello /*c.peerCertificates[0]*/, nil)
 	if err != nil {
@@ -667,52 +674,54 @@ func (hs *clientHandshakeState) doFullHandshake() error {
 		return errors.New("tls: failed to write to key log: " + err.Error())
 	}
 
-	if chainToSend != nil && len(chainToSend.Certificate) > 0 {
-		certVerify := &certificateVerifyMsg{}
+	/*
+		if chainToSend != nil && len(chainToSend.Certificate) > 0 {
+			certVerify := &certificateVerifyMsg{}
 
-		key, ok := chainToSend.PrivateKey.(crypto.Signer)
-		if !ok {
-			c.sendAlert(alertInternalError)
-			return fmt.Errorf("tls: client certificate private key of type %T does not implement crypto.Signer", chainToSend.PrivateKey)
-		}
+			key, ok := chainToSend.PrivateKey.(crypto.Signer)
+			if !ok {
+				c.sendAlert(alertInternalError)
+				return fmt.Errorf("tls: client certificate private key of type %T does not implement crypto.Signer", chainToSend.PrivateKey)
+			}
 
-		var sigType uint8
-		var sigHash crypto.Hash
-		if c.vers >= VersionTLS12 {
-			signatureAlgorithm, err := selectSignatureScheme(c.vers, chainToSend, certReq.supportedSignatureAlgorithms)
+			var sigType uint8
+			var sigHash crypto.Hash
+			if c.vers >= VersionTLS12 {
+				signatureAlgorithm, err := selectSignatureScheme(c.vers, chainToSend, certReq.supportedSignatureAlgorithms)
+				if err != nil {
+					c.sendAlert(alertIllegalParameter)
+					return err
+				}
+				sigType, sigHash, err = typeAndHashFromSignatureScheme(signatureAlgorithm)
+				if err != nil {
+					return c.sendAlert(alertInternalError)
+				}
+				certVerify.hasSignatureAlgorithm = true
+				certVerify.signatureAlgorithm = signatureAlgorithm
+			} else {
+				sigType, sigHash, err = legacyTypeAndHashFromPublicKey(key.Public())
+				if err != nil {
+					c.sendAlert(alertIllegalParameter)
+					return err
+				}
+			}
+
+			signed := hs.finishedHash.hashForClientCertificate(sigType, sigHash)
+			signOpts := crypto.SignerOpts(sigHash)
+			if sigType == signatureRSAPSS {
+				signOpts = &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: sigHash}
+			}
+			certVerify.signature, err = key.Sign(c.config.rand(), signed, signOpts)
 			if err != nil {
-				c.sendAlert(alertIllegalParameter)
+				c.sendAlert(alertInternalError)
 				return err
 			}
-			sigType, sigHash, err = typeAndHashFromSignatureScheme(signatureAlgorithm)
-			if err != nil {
-				return c.sendAlert(alertInternalError)
-			}
-			certVerify.hasSignatureAlgorithm = true
-			certVerify.signatureAlgorithm = signatureAlgorithm
-		} else {
-			sigType, sigHash, err = legacyTypeAndHashFromPublicKey(key.Public())
-			if err != nil {
-				c.sendAlert(alertIllegalParameter)
+
+			if _, err := hs.c.writeHandshakeRecord(certVerify, &hs.finishedHash); err != nil {
 				return err
 			}
 		}
-
-		signed := hs.finishedHash.hashForClientCertificate(sigType, sigHash)
-		signOpts := crypto.SignerOpts(sigHash)
-		if sigType == signatureRSAPSS {
-			signOpts = &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: sigHash}
-		}
-		certVerify.signature, err = key.Sign(c.config.rand(), signed, signOpts)
-		if err != nil {
-			c.sendAlert(alertInternalError)
-			return err
-		}
-
-		if _, err := hs.c.writeHandshakeRecord(certVerify, &hs.finishedHash); err != nil {
-			return err
-		}
-	}
+	*/
 
 	hs.finishedHash.discardHandshakeBuffer()
 
@@ -1087,6 +1096,7 @@ func certificateRequestInfoFromMsg(ctx context.Context, vers uint16, certReq *ce
 	return cri
 }
 
+/*
 func (c *Conn) getClientCertificate(cri *CertificateRequestInfo) (*Certificate, error) {
 	if c.config.GetClientCertificate != nil {
 		return c.config.GetClientCertificate(cri)
@@ -1102,6 +1112,7 @@ func (c *Conn) getClientCertificate(cri *CertificateRequestInfo) (*Certificate, 
 	// No acceptable certificate found. Don't send a certificate.
 	return new(Certificate), nil
 }
+*/
 
 // clientSessionCacheKey returns a key used to cache sessionTickets that could
 // be used to resume previously negotiated TLS sessions with a server.

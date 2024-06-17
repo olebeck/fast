@@ -627,7 +627,7 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 		c.rawInput = bytebufferpool.Get()
 	}
 	defer func() {
-		if c.rawInput.Len() == 0 {
+		if c.rawInput != nil && c.rawInput.Len() == 0 {
 			//println("yeet (rawInput)")
 			bytebufferpool.Put(c.rawInput)
 			c.rawInput = nil

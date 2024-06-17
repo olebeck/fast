@@ -10,7 +10,6 @@ import (
 	"crypto"
 	"crypto/ecdh"
 	"crypto/hmac"
-	"crypto/rsa"
 	"errors"
 	"hash"
 	"time"
@@ -99,9 +98,11 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 	if err := hs.readServerFinished(); err != nil {
 		return err
 	}
-	if err := hs.sendClientCertificate(); err != nil {
-		return err
-	}
+	/*
+		if err := hs.sendClientCertificate(); err != nil {
+			return err
+		}
+	*/
 	if err := hs.sendClientFinished(); err != nil {
 		return err
 	}
@@ -494,12 +495,14 @@ func (hs *clientHandshakeStateTLS13) readServerCertificate() error {
 		// Make sure the connection is still being verified whether or not this
 		// is a resumption. Resumptions currently don't reverify certificates so
 		// they don't call verifyServerCertificate. See Issue 31641.
-		if c.config.VerifyConnection != nil {
-			if err := c.config.VerifyConnection(c.connectionStateLocked()); err != nil {
-				c.sendAlert(alertBadCertificate)
-				return err
+		/*
+			if c.config.VerifyConnection != nil {
+				if err := c.config.VerifyConnection(c.connectionStateLocked()); err != nil {
+					c.sendAlert(alertBadCertificate)
+					return err
+				}
 			}
-		}
+		*/
 		return nil
 	}
 
@@ -629,6 +632,7 @@ func (hs *clientHandshakeStateTLS13) readServerFinished() error {
 	return nil
 }
 
+/*
 func (hs *clientHandshakeStateTLS13) sendClientCertificate() error {
 	c := hs.c
 
@@ -695,6 +699,7 @@ func (hs *clientHandshakeStateTLS13) sendClientCertificate() error {
 
 	return nil
 }
+*/
 
 func (hs *clientHandshakeStateTLS13) sendClientFinished() error {
 	c := hs.c

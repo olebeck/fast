@@ -50,7 +50,7 @@ func (h *Client) GetConn() (hc *Conn) {
 	if h.wait > time.Duration(0) {
 		tt := time.Since(hc.lastReq)
 		if tt < h.wait {
-			time.Sleep(h.wait - tt)
+			time.Sleep((h.wait - tt) + (time.Duration(rand.Intn(250)) * time.Millisecond))
 		}
 	}
 
@@ -94,8 +94,8 @@ func (h *Client) NewConn(req *fasthttp.Request, timeout time.Duration) (*Conn, e
 func (h *Client) DoRetry(req *fasthttp.Request, res *fasthttp.Response, hc **Conn, statusCheck func(int) bool) error {
 	var err error
 	var t1 time.Time
-	var is429 bool
-	for retry := 0; retry < 5; retry++ {
+	count429 := 0
+	for retry := 0; retry < 8; retry++ {
 		if *hc == nil || (*hc).Closed() {
 			*hc, err = h.NewConn(req, 30*time.Second)
 			if err != nil {
@@ -106,22 +106,20 @@ func (h *Client) DoRetry(req *fasthttp.Request, res *fasthttp.Response, hc **Con
 		h.Stats.RequestsSent.Add(1)
 		t1 = time.Now()
 		err = (*hc).DoTimeout(req, res, 30*time.Second)
-		is429 = res.StatusCode() == 429
-		if err == nil && statusCheck(res.StatusCode()) {
-			err = &StatusError{i: (*hc).RequestsSent, url: req.URI().String(), status: res.StatusCode()}
-		}
-
-		if is429 {
+		if res.StatusCode() == 429 {
 			(*hc).Close()
+			*hc = nil
+			count429++
+			continue
+		}
+		if err == nil && statusCheck(res.StatusCode()) && count429 > 1 {
+			err = &StatusError{i: (*hc).RequestsSent, url: req.URI().String(), status: res.StatusCode()}
 		}
 
 	retryErr:
 		if err != nil {
 			h.Stats.LastErr = fmt.Errorf("%v %s", err, string(req.Body()))
 			h.Stats.Retries.Add(1)
-			if !is429 {
-				time.Sleep((10 + time.Duration(rand.Intn(10))) * time.Second)
-			}
 			continue
 		}
 		h.Stats.RequestTimeMS.Add(float64(time.Since(t1).Milliseconds()))

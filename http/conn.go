@@ -20,6 +20,9 @@ func (h *Conn) Closed() bool {
 }
 
 func (hc *Conn) Close() error {
+	if hc.Closed() {
+		return nil
+	}
 	err := hc.nc.Close()
 	hc.client = nil
 	hc.nc.Conn = nil

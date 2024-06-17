@@ -31,6 +31,7 @@ import (
 // using conn as the underlying transport.
 // The configuration config must be non-nil and must include
 // at least one certificate or else set GetCertificate.
+/*
 func Server(conn net.Conn, config *Config) *Conn {
 	c := &Conn{
 		conn:   conn,
@@ -39,6 +40,7 @@ func Server(conn net.Conn, config *Config) *Conn {
 	c.handshakeFn = c.serverHandshake
 	return c
 }
+*/
 
 // Client returns a new TLS client side connection
 // using conn as the underlying transport.
@@ -55,6 +57,7 @@ func Client(conn net.Conn, config *Config) *Conn {
 }
 
 // A listener implements a network listener (net.Listener) for TLS connections.
+/*
 type listener struct {
 	net.Listener
 	config *Config
@@ -96,6 +99,7 @@ func Listen(network, laddr string, config *Config) (net.Listener, error) {
 	}
 	return NewListener(l, config), nil
 }
+*/
 
 /*
 type timeoutError struct{}
