@@ -4,12 +4,11 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
-
-	"github.com/valyala/bytebufferpool"
 )
 
 type Conn struct {
@@ -18,14 +17,11 @@ type Conn struct {
 	Pass string
 
 	nc net.Conn
-	br *bufio.Reader
-	bw *bufio.Writer
-	bb *bytebufferpool.ByteBuffer
+	b  *bufio.ReadWriter
 	l  sync.Mutex
 
-	responsePool sync.Pool
-	errorCh      chan error
-	connectedCh  chan struct{}
+	errorCh     chan error
+	connectedCh chan struct{}
 }
 
 type Response struct {
@@ -36,15 +32,6 @@ type Response struct {
 
 func NewConn() *Conn {
 	return &Conn{
-		bb: bytebufferpool.Get(),
-		responsePool: sync.Pool{
-			New: func() any {
-				return &Response{
-					Headers: make(map[string]string),
-					Body:    make([]byte, 0, 1024),
-				}
-			},
-		},
 		errorCh:     make(chan error, 1),
 		connectedCh: make(chan struct{}),
 	}
@@ -55,8 +42,7 @@ func (c *Conn) Dial(addr string) (err error) {
 	if err != nil {
 		return err
 	}
-	c.br = bufio.NewReader(c.nc)
-	c.bw = bufio.NewWriter(c.nc)
+	c.b = bufio.NewReadWriter(bufio.NewReader(c.nc), bufio.NewWriterSize(c.nc, 1400))
 	go c.readLoop()
 	return c.Connect()
 }
@@ -64,16 +50,16 @@ func (c *Conn) Dial(addr string) (err error) {
 func (c *Conn) Connect() error {
 	c.l.Lock()
 	defer c.l.Unlock()
-	_, err := c.bw.WriteString(
-		"CONNECT\r\n" +
-			"accept-version:1.0,1.1,2.0\r\n" +
-			"host:" + c.Host + "\r\n" +
-			"login:" + c.User + "\r\n" +
-			"passcode:" + c.Pass + "\r\n\r\n" + "\x00")
+	_, err := c.b.WriteString(
+		"CONNECT\n" +
+			"accept-version:1.0,1.1,2.0\n" +
+			"host:" + c.Host + "\n" +
+			"login:" + c.User + "\n" +
+			"passcode:" + c.Pass + "\n\n" + "\x00\n")
 	if err != nil {
 		return err
 	}
-	err = c.bw.Flush()
+	err = c.b.Flush()
 	if err != nil {
 		return err
 	}
@@ -91,39 +77,39 @@ func (c *Conn) Send(destination, contentType string, body []byte, headers map[st
 	defer c.l.Unlock()
 	<-c.connectedCh
 
-	_, err := c.bw.WriteString("SEND\r\n")
+	_, err := c.b.WriteString("SEND\n")
 	if err != nil {
 		return err
 	}
-	c.bw.WriteString("destination:" + destination + "\r\n")
-	c.bw.WriteString("content-length:" + strconv.Itoa(len(body)) + "\r\n")
+	c.b.WriteString("destination:" + destination + "\n")
+	c.b.WriteString("content-length:" + strconv.Itoa(len(body)) + "\n")
 	if contentType != "" {
-		c.bw.WriteString("content-type:" + contentType + "\r\n")
+		c.b.WriteString("content-type:" + contentType + "\n")
 	}
 
 	for key, value := range headers {
-		_, err := c.bw.WriteString(key + ":" + value + "\r\n")
+		_, err := c.b.WriteString(key + ":" + value + "\n")
 		if err != nil {
 			return err
 		}
 	}
 
-	_, err = c.bw.WriteString("\r\n")
+	_, err = c.b.WriteRune('\n')
 	if err != nil {
 		return err
 	}
 
-	_, err = c.bw.Write(body)
+	_, err = c.b.Write(body)
 	if err != nil {
 		return err
 	}
 
-	_, err = c.bw.WriteRune('\x00')
+	_, err = c.b.WriteString("\x00\n")
 	if err != nil {
 		return err
 	}
 
-	err = c.bw.Flush()
+	err = c.b.Flush()
 	if err != nil {
 		return err
 	}
@@ -154,27 +140,24 @@ func (c *Conn) readLoop() {
 	}
 }
 
-func (c *Conn) putResponse(resp *Response) {
-	for k := range resp.Headers {
-		delete(resp.Headers, k)
-	}
-	resp.Body = resp.Body[:0]
-	c.responsePool.Put(resp)
-}
-
 func (c *Conn) readResponse() (resp *Response, err error) {
-	resp = c.responsePool.Get().(*Response)
+	resp = &Response{
+		Headers: make(map[string]string),
+	}
 
-	resp.Name, err = c.readLine()
+	resp.Name, err = c.b.ReadString('\n')
 	if err != nil {
 		return nil, err
 	}
+	resp.Name = resp.Name[:len(resp.Name)-1]
 
+	var contentLength = -1
 	for {
-		line, err := c.readLine()
+		line, err := c.b.ReadString('\n')
 		if err != nil {
 			return nil, err
 		}
+		line = line[:len(line)-1]
 		if len(line) == 0 {
 			break
 		}
@@ -184,46 +167,60 @@ func (c *Conn) readResponse() (resp *Response, err error) {
 		}
 		key := line[:idxColon]
 		value := line[idxColon+1:]
-		resp.Headers[key] = strings.TrimSpace(value)
+		resp.Headers[key] = value
+		if key == "content-length" {
+			contentLength, err = strconv.Atoi(value)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
-	err = c.readBody(resp)
+	if contentLength >= 0 {
+		if contentLength > 0 {
+			resp.Body = make([]byte, contentLength)
+			_, err = io.ReadFull(c.b, resp.Body)
+			if err != nil {
+				return nil, err
+			}
+		}
+		null, err := c.b.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		if null != 0 {
+			return nil, fmt.Errorf("not 0x00 at the end")
+		}
+	} else {
+		resp.Body, err = c.b.ReadBytes('\x00')
+		if err != nil {
+			return nil, err
+		}
+		if len(resp.Body) > 0 {
+			resp.Body = resp.Body[:len(resp.Body)-1]
+		}
+	}
+	eol, err := c.b.ReadByte()
 	if err != nil {
+		return nil, err
+	}
+	if eol != '\n' {
 		return nil, err
 	}
 
 	return resp, nil
 }
 
-func (c *Conn) readLine() (string, error) {
-	line, err := c.br.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimRight(line, "\r\n"), nil
-}
-
-func (c *Conn) readBody(resp *Response) error {
-	c.bb.Reset()
-	for {
-		b, err := c.br.ReadByte()
-		if err != nil {
-			return err
-		}
-		if b == 0 {
-			break
-		}
-		c.bb.WriteByte(b)
-	}
-	resp.Body = append(resp.Body[:0], c.bb.Bytes()...)
-	return nil
-}
-
 func (c *Conn) Disconnect() error {
+	if c.nc == nil {
+		return nil
+	}
 	c.l.Lock()
 	defer c.l.Unlock()
-	c.bw.WriteString("DISCONNECT\r\n\x00")
-	c.bw.Flush()
+	c.b.WriteString("DISCONNECT\n\x00\n")
+	c.b.Flush()
 	c.nc.Close()
+	c.b = nil
+	c.nc = nil
 	return nil
 }

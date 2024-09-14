@@ -40,28 +40,30 @@ func NewQueue(queueUrl string) (q *Queue, err error) {
 func (q *Queue) Connect() (err error) {
 	addr := q.url.Hostname() + ":" + q.url.Port()
 	password, _ := q.url.User.Password()
-	c := tinystomp.NewConn()
-	c.Host = q.url.Path[1:]
-	c.User = q.url.User.Username()
-	c.Pass = password
-	err = c.Dial(addr)
+	conn := tinystomp.NewConn()
+	conn.Host = q.url.Path[1:]
+	conn.User = q.url.User.Username()
+	conn.Pass = password
+	err = conn.Dial(addr)
 	if err != nil {
 		return err
 	}
-	q.c.Store(c)
+	if oldConn := q.c.Swap(conn); oldConn != nil {
+		oldConn.Disconnect()
+	}
 	q.needReconnect.Store(false)
 	q.cond.Broadcast()
 	return nil
 }
 
-func (q *Queue) Send(body []byte) error {
+func (q *Queue) Send(queueName string, body []byte) error {
 retry:
 	if q.closed.Load() {
 		return fmt.Errorf("connection is closed")
 	}
 
 	conn := q.c.Load()
-	err := conn.Send("/amq/queue/javaprofiles", "application/json", body, q.Headers)
+	err := conn.Send("/amq/queue/"+queueName, "application/json", body, q.Headers)
 	if err != nil {
 		logrus.Error(err)
 		if q.needReconnect.CompareAndSwap(false, true) {

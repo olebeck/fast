@@ -1,45 +1,46 @@
 package statssender
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
 	"time"
 
+	"github.com/olebeck/fast"
 	"github.com/sirupsen/logrus"
 )
 
 type StatsSender struct {
-	sessionID   string
-	statsServer string
-	statFunc    func() any
-	client      http.Client
+	sessionID string
+	statFunc  func() any
+	queue     *fast.Queue
 }
 
-func New(sessionID, statsServer string, StatFunc func() any) *StatsSender {
+func New(sessionID string, queue *fast.Queue, StatFunc func() any) *StatsSender {
 	return &StatsSender{
-		sessionID:   sessionID,
-		statsServer: statsServer,
-		statFunc:    StatFunc,
+		sessionID: sessionID,
+		queue:     queue,
+		statFunc:  StatFunc,
 	}
 }
 
 func (s *StatsSender) Run(ctx context.Context, info any) {
 	body, err := json.Marshal(&struct {
-		ID   string
-		Info any
+		Type      string
+		SessionID string
+		Data      any
 	}{
-		ID:   s.sessionID,
-		Info: info,
+		Type:      "start_session",
+		SessionID: s.sessionID,
+		Data:      info,
 	})
 	if err != nil {
 		logrus.Error(err)
 		return
 	}
-	_, err = s.client.Post(s.statsServer+"/api/start_session", "application/json", bytes.NewReader(body))
+	err = s.queue.Send("stats", body)
 	if err != nil {
 		logrus.Error(err)
+		return
 	}
 
 	t := time.NewTicker(15 * time.Second)
@@ -50,9 +51,11 @@ func (s *StatsSender) Run(ctx context.Context, info any) {
 
 		stat := s.statFunc()
 		body, err := json.Marshal(&struct {
+			Type      string
 			SessionID string
 			Data      any
 		}{
+			Type:      "stat",
 			SessionID: s.sessionID,
 			Data:      stat,
 		})
@@ -60,7 +63,8 @@ func (s *StatsSender) Run(ctx context.Context, info any) {
 			logrus.Error(err)
 			continue
 		}
-		_, err = s.client.Post(s.statsServer+"/api/submit_stat", "application/json", bytes.NewReader(body))
+
+		err = s.queue.Send("stats", body)
 		if err != nil {
 			logrus.Error(err)
 			continue
