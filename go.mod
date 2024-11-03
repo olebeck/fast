@@ -12,7 +12,7 @@ require (
 	github.com/valyala/fasthttp v1.54.0
 	golang.org/x/crypto v0.24.0
 	golang.org/x/sync v0.7.0
-	golang.org/x/sys v0.21.0
+	golang.org/x/sys v0.24.0
 	golang.org/x/text v0.16.0
 )
 
@@ -28,5 +28,6 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.15 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
+	github.com/valkey-io/valkey-go v1.0.48 // indirect
 	github.com/valyala/tcplisten v1.0.0 // indirect
 )
