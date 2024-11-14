@@ -2,42 +2,74 @@ package statssender
 
 import (
 	"context"
-	"encoding/json"
+	"net/http"
 	"time"
 
-	"github.com/olebeck/fast"
+	"github.com/cenkalti/backoff/v4"
+	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
 
 type StatsSender struct {
 	sessionID string
+	url       string
+	conn      *websocket.Conn
 	statFunc  func() any
-	queue     *fast.Queue
 }
 
-func New(sessionID string, queue *fast.Queue, StatFunc func() any) *StatsSender {
+func New(sessionID string, url string, StatFunc func() any) *StatsSender {
 	return &StatsSender{
 		sessionID: sessionID,
-		queue:     queue,
+		url:       url,
 		statFunc:  StatFunc,
 	}
 }
 
+func (s *StatsSender) connect() error {
+	conn, res, err := websocket.DefaultDialer.Dial(s.url, http.Header{})
+	if err != nil {
+		return err
+	}
+	_ = res
+	s.conn = conn
+	return nil
+}
+
+func (s *StatsSender) sendJson(a any) error {
+	b := backoff.NewExponentialBackOff(backoff.WithMaxInterval(1 * time.Minute))
+retry:
+	if s.conn == nil {
+		err := s.connect()
+		if err != nil {
+			s.conn = nil
+			bo := b.NextBackOff()
+			logrus.WithField("retry-in", bo).Error(err)
+			time.Sleep(bo)
+			goto retry
+		}
+		err = s.conn.WriteJSON(a)
+		if err != nil {
+			s.conn.Close()
+			s.conn = nil
+			bo := b.NextBackOff()
+			logrus.WithField("retry-in", bo).Error(err)
+			time.Sleep(bo)
+			goto retry
+		}
+	}
+	return nil
+}
+
 func (s *StatsSender) Run(ctx context.Context, info any) {
-	body, err := json.Marshal(&struct {
+	err := s.sendJson(&struct {
 		Type      string
 		SessionID string
 		Data      any
 	}{
-		Type:      "start_session",
+		Type:      "start",
 		SessionID: s.sessionID,
 		Data:      info,
 	})
-	if err != nil {
-		logrus.Error(err)
-		return
-	}
-	err = s.queue.Send("stats", body)
 	if err != nil {
 		logrus.Error(err)
 		return
@@ -48,9 +80,8 @@ func (s *StatsSender) Run(ctx context.Context, info any) {
 		if ctx.Err() != nil {
 			return
 		}
-
 		stat := s.statFunc()
-		body, err := json.Marshal(&struct {
+		err := s.sendJson(&struct {
 			Type      string
 			SessionID string
 			Data      any
@@ -61,13 +92,6 @@ func (s *StatsSender) Run(ctx context.Context, info any) {
 		})
 		if err != nil {
 			logrus.Error(err)
-			continue
-		}
-
-		err = s.queue.Send("stats", body)
-		if err != nil {
-			logrus.Error(err)
-			continue
 		}
 	}
 }

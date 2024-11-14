@@ -2,18 +2,23 @@ package statsdb
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"slices"
+	"sync"
 	"testing/fstest"
 	"time"
 
 	_ "embed"
 
+	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/template/html/v2"
 	"github.com/google/uuid"
 	"github.com/olebeck/fast/stats"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/text/message"
 )
 
@@ -53,32 +58,92 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 	})
 
 	api := group.Group("/api")
-	api.Post("/start_session", func(c *fiber.Ctx) error {
-		var session stats.Session[Tinfo, Tstat]
-		err := c.BodyParser(&session)
-		if err != nil {
-			return err
+
+	api.Use("/ws", func(c *fiber.Ctx) error {
+		// IsWebSocketUpgrade returns true if the client
+		// requested upgrade to the WebSocket protocol.
+		if websocket.IsWebSocketUpgrade(c) {
+			c.Locals("allowed", true)
+			return c.Next()
 		}
-		session.Start = time.Now()
-		err = statsDB.NewSession(&session)
-		if err != nil {
-			return err
-		}
-		return c.SendStatus(200)
+		return fiber.ErrUpgradeRequired
 	})
 
-	api.Post("/submit_stat", func(c *fiber.Ctx) error {
-		var stat StatSubmit[Tstat]
-		err := c.BodyParser(&stat)
+	var wsClientsLock sync.Mutex
+	var wsClients = make(map[netip.Addr]*websocket.Conn)
+
+	broadcast := func(d any) error {
+		data, err := json.Marshal(d)
 		if err != nil {
 			return err
 		}
-		err = statsDB.HandleSubmit(&stat, time.Now())
-		if err != nil {
-			return err
+
+		wsClientsLock.Lock()
+		for k, c := range wsClients {
+			err := c.WriteMessage(websocket.TextMessage, data)
+			if err != nil {
+				delete(wsClients, k)
+			}
 		}
-		return c.SendStatus(200)
-	})
+		wsClientsLock.Unlock()
+		return nil
+	}
+
+	api.Get("/ws/submit", websocket.New(func(c *websocket.Conn) {
+		var msg struct {
+			SessionID uuid.UUID
+			Type      string
+			Body      json.RawMessage
+		}
+		err = c.ReadJSON(&msg)
+		if err != nil {
+			logrus.Error(err)
+			return
+		}
+		switch msg.Type {
+		case "start":
+			var info Tinfo
+			if err = json.Unmarshal(msg.Body, &info); err != nil {
+				logrus.Error(err)
+				return
+			}
+			if err = statsDB.NewSession(msg.SessionID, time.Now(), info); err != nil {
+				logrus.Error(err)
+				return
+			}
+			broadcast(msg)
+		case "stat":
+			var stat Tstat
+			if err = json.Unmarshal(msg.Body, &stat); err != nil {
+				logrus.Error(err)
+				return
+			}
+			if err = statsDB.HandleSubmit(msg.SessionID, &stat, time.Now()); err != nil {
+				logrus.Error(err)
+				return
+			}
+			broadcast(msg)
+		}
+	}))
+
+	api.Get("/ws/stats", websocket.New(func(c *websocket.Conn) {
+		wsClientsLock.Lock()
+		addr := netip.MustParseAddr(c.RemoteAddr().String())
+		wsClients[addr] = c
+		wsClientsLock.Unlock()
+		defer func() {
+			wsClientsLock.Lock()
+			delete(wsClients, addr)
+			wsClientsLock.Unlock()
+		}()
+		for {
+			var a any
+			err := c.ReadJSON(a)
+			if err != nil {
+				break
+			}
+		}
+	}))
 
 	api.Get("/stats", func(c *fiber.Ctx) error {
 		duration, err := time.ParseDuration(c.Query("duration", "2h"))

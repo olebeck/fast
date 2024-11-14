@@ -63,7 +63,7 @@ type StatSubmit[Tstat stats.StatData] struct {
 	Data      Tstat
 }
 
-func (s *Stats[Tinfo, Tstat]) HandleSubmit(stat *StatSubmit[Tstat], now time.Time) error {
+func (s *Stats[Tinfo, Tstat]) HandleSubmit(id uuid.UUID, stat *Tstat, now time.Time) error {
 	// Start a transaction
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -79,27 +79,27 @@ func (s *Stats[Tinfo, Tstat]) HandleSubmit(stat *StatSubmit[Tstat], now time.Tim
 		WHERE id = ?
 		ORDER BY dt DESC
 		LIMIT 1
-	`, stat.SessionID).Scan(&lastFoundCount)
+	`, id).Scan(&lastFoundCount)
 	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
 
 	// Marshal the stat data to JSON
-	statData, err := json.Marshal(stat.Data)
+	statData, err := json.Marshal(stat)
 	if err != nil {
 		return err
 	}
 
 	s.l.Lock()
-	add := s.foundAdd[stat.SessionID]
+	add := s.foundAdd[id]
 	lastFoundCount.Int64 += int64(add)
-	delete(s.foundAdd, stat.SessionID)
+	delete(s.foundAdd, id)
 	s.l.Unlock()
 
 	// Insert the new stat entry
 	_, err = tx.Exec(`
 		INSERT INTO stats (id, dt, data, found_count) VALUES (?, ?, ?, ?);
-	`, stat.SessionID, now, statData, lastFoundCount.Int64)
+	`, id, now, statData, lastFoundCount.Int64)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func (s *Stats[Tinfo, Tstat]) HandleSubmit(stat *StatSubmit[Tstat], now time.Tim
 	// Update the latest_stat in the sessions table
 	_, err = tx.Exec(`
 		UPDATE sessions SET latest_stat = ? WHERE id = ?;
-	`, now, stat.SessionID)
+	`, now, id)
 	if err != nil {
 		return err
 	}
@@ -116,8 +116,8 @@ func (s *Stats[Tinfo, Tstat]) HandleSubmit(stat *StatSubmit[Tstat], now time.Tim
 	return tx.Commit()
 }
 
-func (s *Stats[Tinfo, Tstat]) NewSession(session *stats.Session[Tinfo, Tstat]) error {
-	sessionInfo, err := json.Marshal(session.Info)
+func (s *Stats[Tinfo, Tstat]) NewSession(id uuid.UUID, start time.Time, info Tinfo) error {
+	sessionInfo, err := json.Marshal(info)
 	if err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func (s *Stats[Tinfo, Tstat]) NewSession(session *stats.Session[Tinfo, Tstat]) e
 	_, err = s.db.Exec(`
 		INSERT INTO sessions (id, start, info)
 		VALUES ($1,$2,$3);
-	`, session.ID, session.Start, sessionInfo)
+	`, id, start, sessionInfo)
 	if err != nil {
 		return err
 	}

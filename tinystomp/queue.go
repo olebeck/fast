@@ -1,4 +1,4 @@
-package fast
+package tinystomp
 
 import (
 	"fmt"
@@ -6,13 +6,12 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/olebeck/fast/tinystomp"
 	"github.com/sirupsen/logrus"
 )
 
 type Queue struct {
 	url *url.URL
-	c   atomic.Pointer[tinystomp.Conn]
+	c   atomic.Pointer[Conn]
 
 	needReconnect atomic.Bool
 	mu            sync.Mutex
@@ -40,7 +39,7 @@ func NewQueueOld(queueUrl string) (q *Queue, err error) {
 func (q *Queue) Connect() (err error) {
 	addr := q.url.Hostname() + ":" + q.url.Port()
 	password, _ := q.url.User.Password()
-	conn := tinystomp.NewConn()
+	conn := NewConn()
 	conn.Host = q.url.Path[1:]
 	conn.User = q.url.User.Username()
 	conn.Pass = password
