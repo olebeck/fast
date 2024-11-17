@@ -47,16 +47,17 @@ retry:
 			time.Sleep(bo)
 			goto retry
 		}
-		err = s.conn.WriteJSON(a)
-		if err != nil {
-			s.conn.Close()
-			s.conn = nil
-			bo := b.NextBackOff()
-			logrus.WithField("retry-in", bo).Error(err)
-			time.Sleep(bo)
-			goto retry
-		}
 	}
+
+	if err := s.conn.WriteJSON(a); err != nil {
+		s.conn.Close()
+		s.conn = nil
+		bo := b.NextBackOff()
+		logrus.WithField("retry-in", bo).Error(err)
+		time.Sleep(bo)
+		goto retry
+	}
+
 	return nil
 }
 
