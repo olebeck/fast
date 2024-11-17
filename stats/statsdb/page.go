@@ -90,39 +90,41 @@ func StatsPage[Tinfo any, Tstat stats.StatData](group fiber.Router, statTemplate
 	}
 
 	api.Get("/ws/submit", websocket.New(func(c *websocket.Conn) {
-		var msg struct {
-			SessionID uuid.UUID
-			Type      string
-			Body      json.RawMessage
-		}
-		err = c.ReadJSON(&msg)
-		if err != nil {
-			logrus.Error(err)
-			return
-		}
-		switch msg.Type {
-		case "start":
-			var info Tinfo
-			if err = json.Unmarshal(msg.Body, &info); err != nil {
+		for {
+			var msg struct {
+				SessionID uuid.UUID
+				Type      string
+				Data      json.RawMessage
+			}
+			err = c.ReadJSON(&msg)
+			if err != nil {
 				logrus.Error(err)
 				return
 			}
-			if err = statsDB.NewSession(msg.SessionID, time.Now(), info); err != nil {
-				logrus.Error(err)
-				return
+			switch msg.Type {
+			case "start":
+				var info Tinfo
+				if err = json.Unmarshal(msg.Data, &info); err != nil {
+					logrus.Error(err)
+					return
+				}
+				if err = statsDB.NewSession(msg.SessionID, time.Now(), info); err != nil {
+					logrus.Error(err)
+					return
+				}
+				broadcast(msg)
+			case "stat":
+				var stat Tstat
+				if err = json.Unmarshal(msg.Data, &stat); err != nil {
+					logrus.Error(err)
+					return
+				}
+				if err = statsDB.HandleSubmit(msg.SessionID, &stat, time.Now()); err != nil {
+					logrus.Error(err)
+					return
+				}
+				broadcast(msg)
 			}
-			broadcast(msg)
-		case "stat":
-			var stat Tstat
-			if err = json.Unmarshal(msg.Body, &stat); err != nil {
-				logrus.Error(err)
-				return
-			}
-			if err = statsDB.HandleSubmit(msg.SessionID, &stat, time.Now()); err != nil {
-				logrus.Error(err)
-				return
-			}
-			broadcast(msg)
 		}
 	}))
 
