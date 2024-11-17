@@ -354,6 +354,7 @@ func (c *PushClient) pusher() {
 		err := c.useConn(func(c net.Conn) error {
 			c.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			_, err := c.Write(buf.Bytes())
+			buf.Reset()
 			return err
 		})
 		if err != nil {
