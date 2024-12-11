@@ -2,17 +2,16 @@ package fast
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net"
 	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
@@ -25,11 +24,13 @@ const (
 	IDPush
 )
 
+var respondyPackets = []bool{
+	false, true, false, false,
+}
+
 type Packet interface {
-	io.WriterTo
-	io.ReaderFrom
-	ID() uint8
-	ExpectReply() bool
+	Marshal(b []byte) []byte
+	Unmarshal(b []byte)
 }
 
 type LoginPacket struct {
@@ -37,114 +38,60 @@ type LoginPacket struct {
 	Password  string
 }
 
-func (l *LoginPacket) WriteTo(w io.Writer) (int64, error) {
-	if _, err := w.Write(l.SessionID[:]); err != nil {
-		return 0, err
-	}
-	binary.Write(w, binary.LittleEndian, uint8(len(l.Password)))
-	_, err := w.Write([]byte(l.Password))
-	return int64(16 + 1 + len(l.Password)), err
+func s2b(s string) []byte {
+	return unsafe.Slice(unsafe.StringData(s), len(s))
 }
 
-func (l *LoginPacket) ReadFrom(r io.Reader) (int64, error) {
-	if _, err := io.ReadFull(r, l.SessionID[:]); err != nil {
-		return 0, err
-	}
-	var passwordLen uint8
-	if err := binary.Read(r, binary.LittleEndian, &passwordLen); err != nil {
-		return 0, err
-	}
-	if passwordLen > 128 {
-		return 0, fmt.Errorf("password too long %d", passwordLen)
-	}
-	var password = make([]byte, passwordLen)
-	if _, err := io.ReadFull(r, password); err != nil {
-		return 0, err
-	}
-	l.Password = string(password)
-	return 16 + 1 + int64(passwordLen), nil
+func (l *LoginPacket) Marshal(b []byte) []byte {
+	b = append(b, l.SessionID[:]...)
+	b = append(b, uint8(len(l.Password)))
+	b = append(b, s2b(l.Password)...)
+	return b
 }
 
-func (LoginPacket) ID() uint8 {
-	return IDLogin
-}
-
-func (LoginPacket) ExpectReply() bool {
-	return true
+func (l *LoginPacket) Unmarshal(b []byte) {
+	copy(l.SessionID[:], b[:16])
+	passwordLen := b[16]
+	l.Password = string(b[17 : 17+passwordLen])
 }
 
 type PushPacket struct {
 	Data []byte
 }
 
-func (l *PushPacket) WriteTo(w io.Writer) (int64, error) {
-	binary.Write(w, binary.LittleEndian, uint32(len(l.Data)))
-	_, err := w.Write(l.Data)
-	return 4 + int64(len(l.Data)), err
+func (l *PushPacket) Marshal(b []byte) []byte {
+	b = binary.LittleEndian.AppendUint32(b, uint32(len(l.Data)))
+	b = append(b, l.Data...)
+	return b
 }
 
-func (l *PushPacket) ReadFrom(r io.Reader) (int64, error) {
-	var dataLen uint32
-	if err := binary.Read(r, binary.LittleEndian, &dataLen); err != nil {
-		return 0, err
-	}
-	if dataLen > 0x100000 {
-		return 0, fmt.Errorf("data too long %d", dataLen)
-	}
-	var data = make([]byte, dataLen)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return 0, err
-	}
-	l.Data = data
-	return 4 + int64(dataLen), nil
-}
-
-func (PushPacket) ID() uint8 {
-	return IDPush
-}
-
-func (PushPacket) ExpectReply() bool {
-	return false
+func (l *PushPacket) Unmarshal(b []byte) {
+	dataLen := binary.LittleEndian.Uint32(b)
+	l.Data = b[4 : 4+dataLen]
 }
 
 type ResponsePacket struct {
 	err error
 }
 
-func (l *ResponsePacket) WriteTo(w io.Writer) (int64, error) {
+func (l *ResponsePacket) Marshal(b []byte) []byte {
 	if l.err == nil {
-		w.Write([]byte{0, 0, 0, 0})
-		return 4, nil
+		b = append(b, []byte{0, 0, 0, 0}...)
+		return b
 	}
 	errStr := l.err.Error()
-	binary.Write(w, binary.LittleEndian, uint32(len(errStr)))
-	_, err := w.Write([]byte(errStr))
-	return int64(4 + len(errStr)), err
+	b = binary.LittleEndian.AppendUint32(b, uint32(len(errStr)))
+	b = append(b, s2b(errStr)...)
+	return b
 }
 
-func (l *ResponsePacket) ReadFrom(r io.Reader) (int64, error) {
-	var errLen uint32
-	if err := binary.Read(r, binary.LittleEndian, &errLen); err != nil {
-		return 0, err
-	}
+func (l *ResponsePacket) Unmarshal(b []byte) {
+	errLen := binary.LittleEndian.Uint32(b)
 	if errLen == 0 {
 		l.err = nil
-		return 4, nil
+		return
 	}
-	var errStr = make([]byte, errLen)
-	if _, err := io.ReadFull(r, errStr); err != nil {
-		return 0, err
-	}
-	l.err = errors.New(string(errStr))
-	return int64(errLen) + 4, nil
-}
-
-func (ResponsePacket) ID() uint8 {
-	return IDResponse
-}
-
-func (ResponsePacket) ExpectReply() bool {
-	return false
+	l.err = errors.New(string(b[4 : 4+errLen]))
 }
 
 func packetById(id uint8) Packet {
@@ -167,10 +114,11 @@ type PushClient struct {
 	connLock     sync.Mutex
 	pingTicker   *time.Ticker
 	readErr      atomic.Pointer[error]
-	sendBuf      bytes.Buffer
 	transactions sync.Map
 	pushes       chan []byte
 	stopChan     chan struct{}
+
+	transactionID uint16
 }
 
 func NewPushClient(serverUrl string, sessionId uuid.UUID) (q *PushClient, err error) {
@@ -206,14 +154,14 @@ func (q *PushClient) connect() (err error) {
 	go func() {
 		for range q.pingTicker.C {
 			q.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			q.conn.Write([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}) // empty packet for ping
+			q.conn.Write([]byte{0, 0, 0, 0, 0, 0, 0}) // empty packet for ping
 		}
 	}()
 
-	transactionID, err := q.writePacket(&LoginPacket{
+	transactionID, err := q.writePacket(IDLogin, &LoginPacket{
 		SessionID: q.sessionId,
 		Password:  username,
-	}, true)
+	})
 	if err != nil {
 		return err
 	}
@@ -231,37 +179,26 @@ func (q *PushClient) connect() (err error) {
 	return nil
 }
 
-func (q *PushClient) writePacket(packet Packet, locked bool) (int64, error) {
+func (q *PushClient) writePacket(id uint8, packet Packet) (transactionID uint16, err error) {
+	q.connLock.Lock()
+	defer q.connLock.Unlock()
+
+	q.transactionID++
+	transactionID = q.transactionID
+
 	// serialize packet
-	q.sendBuf.Reset()
-	q.sendBuf.WriteByte(packet.ID())
-	q.sendBuf.Write([]byte{0, 0, 0, 0})
-	transactionID := rand.Int64()
-	binary.Write(&q.sendBuf, binary.LittleEndian, transactionID)
-	packetLen, err := packet.WriteTo(&q.sendBuf)
-	if err != nil {
-		return transactionID, err
-	}
-	binary.LittleEndian.PutUint32(q.sendBuf.Bytes()[1:], uint32(packetLen))
+	var sendBuf []byte
+	sendBuf = serializePacket(sendBuf, id, packet, transactionID)
 
 	// register reply
-	if packet.ExpectReply() {
+	if respondyPackets[id] {
 		m := &sync.Mutex{}
 		m.Lock()
 		q.transactions.Store(transactionID, m)
 	}
 
-	// write
-	if locked {
-		q.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		_, err = q.sendBuf.WriteTo(q.conn)
-	} else {
-		q.useConn(func(c net.Conn) error {
-			c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			_, err = q.sendBuf.WriteTo(c)
-			return err
-		})
-	}
+	q.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_, err = q.conn.Write(sendBuf)
 	if err != nil {
 		return 0, err
 	}
@@ -269,7 +206,7 @@ func (q *PushClient) writePacket(packet Packet, locked bool) (int64, error) {
 	return transactionID, err
 }
 
-func (q *PushClient) readResponse(transactionID int64) (Packet, error) {
+func (q *PushClient) readResponse(transactionID uint16) (Packet, error) {
 	// wait
 	m, ok := q.transactions.Load(transactionID)
 	if !ok {
@@ -298,9 +235,11 @@ func (q *PushClient) readLoop() {
 			return true
 		})
 	}()
+
+	var recvBuf []byte
 	for {
 		q.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-		packet, transactionID, err := readPacket(q.conn)
+		packet, transactionID, err := readPacket(q.conn, &recvBuf, nil)
 		if err != nil {
 			q.readErr.Store(&err)
 			return
@@ -319,8 +258,6 @@ func (q *PushClient) readLoop() {
 }
 
 func (q *PushClient) useConn(fn func(c net.Conn) error) (err error) {
-	q.connLock.Lock()
-	defer q.connLock.Unlock()
 	if q.conn == nil {
 		b := backoff.NewExponentialBackOff(
 			backoff.WithInitialInterval(1*time.Second),
@@ -339,12 +276,14 @@ func (q *PushClient) useConn(fn func(c net.Conn) error) (err error) {
 		q.conn.Close()
 		q.pingTicker.Stop()
 		q.conn = nil
+		return q.useConn(fn)
 	}
 	return err
 }
 
 func (c *PushClient) pusher() {
-	var buf bytes.Buffer
+	var buf []byte
+
 	batch := 0
 	flush := func() {
 		if batch == 0 {
@@ -353,8 +292,8 @@ func (c *PushClient) pusher() {
 	retry:
 		err := c.useConn(func(c net.Conn) error {
 			c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			_, err := c.Write(buf.Bytes())
-			buf.Reset()
+			_, err := c.Write(buf)
+			buf = buf[:0]
 			return err
 		})
 		if err != nil {
@@ -364,21 +303,22 @@ func (c *PushClient) pusher() {
 		}
 	}
 
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+
+	var pp PushPacket
 
 	for {
 		select {
 		case data := <-c.pushes:
-			if err := serializePacket(&buf, &PushPacket{Data: data}, 0); err != nil {
-				panic(err)
-			}
+			pp.Data = data
+			buf = serializePacket(buf, IDPush, &pp, 0)
 			batch++
 			if batch >= 100 {
-				flush() // Flush when batch size reaches 20
+				flush() // Flush when batch size reaches 100
 			}
 		case <-ticker.C:
-			flush() // Flush at regular intervals even if batch < 20
+			flush() // Flush at regular intervals even if batch < 100
 		case <-c.stopChan:
 			flush() // Final flush on stop
 			return
@@ -386,7 +326,6 @@ func (c *PushClient) pusher() {
 	}
 }
 
-// push data
 func (q *PushClient) Push(data []byte) error {
 	q.pushes <- data
 	return nil
@@ -437,7 +376,6 @@ func (s *PushServer) acceptLoop() {
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
-			logrus.Errorf("Failed to accept connection: %v", err)
 			return
 		}
 
@@ -470,8 +408,17 @@ func (s *PushServer) handleConnection(conn net.Conn) {
 	}()
 
 	br := bufio.NewReader(conn)
+
+	var packets = map[uint8]Packet{
+		IDLogin:    &LoginPacket{},
+		IDPush:     &PushPacket{},
+		IDResponse: &ResponsePacket{},
+	}
+
+	var recvBuf []byte
+
 	for {
-		packet, transactionID, err := readPacket(br)
+		packet, transactionID, err := readPacket(br, &recvBuf, packets)
 		if err != nil {
 			logrus.Errorf("Failed to read packet: %v", err)
 			return
@@ -488,15 +435,11 @@ func (s *PushServer) handleConnection(conn net.Conn) {
 
 			logrus.Infof("Received login packet with session ID %s", packet.SessionID)
 			if packet.Password != s.Password {
-				var buf bytes.Buffer
-				if err := serializePacket(&buf, &ResponsePacket{
+				buf := serializePacket(nil, IDResponse, &ResponsePacket{
 					err: fmt.Errorf("Unauthorized"),
-				}, transactionID); err != nil {
-					logrus.Error(err)
-					return
-				}
+				}, transactionID)
 				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				if _, err := conn.Write(buf.Bytes()); err != nil {
+				if _, err := conn.Write(buf); err != nil {
 					logrus.Errorf("failed to send login response: %v", err)
 				}
 				return
@@ -505,14 +448,9 @@ func (s *PushServer) handleConnection(conn net.Conn) {
 			sessionID = packet.SessionID
 			loggedIn = true
 
-			var buf bytes.Buffer
-			err := serializePacket(&buf, &ResponsePacket{}, transactionID)
-			if err != nil {
-				logrus.Error(err)
-				return
-			}
+			buf := serializePacket(nil, IDResponse, &ResponsePacket{}, transactionID)
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if _, err = conn.Write(buf.Bytes()); err != nil {
+			if _, err = conn.Write(buf); err != nil {
 				logrus.Errorf("failed to send login response: %v", err)
 			}
 			continue
@@ -522,51 +460,66 @@ func (s *PushServer) handleConnection(conn net.Conn) {
 		case *PushPacket:
 			s.Push <- Push{Session: sessionID, Data: packet.Data}
 		default:
-			logrus.Errorf("Received unsupported packet ID: %d", packet.ID())
-		}
-		if err != nil {
-			logrus.Errorf("Error handling packet: %v", err)
-			return
+			logrus.Errorf("Received unsupported packet: %t", packet)
 		}
 	}
 }
 
-func readPacket(r io.Reader) (Packet, int64, error) {
-	var header [1 + 4 + 8]byte
+func readPacket(r io.Reader, recvBufP *[]byte, packets map[uint8]Packet) (Packet, uint16, error) {
+	var header [8]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, 0, err
 	}
 	if header[0] == 0 { // ping
 		return nil, 0, nil
 	}
-	packet := packetById(header[0])
+
+	var packet Packet
+	if packets == nil {
+		packet = packetById(header[0])
+	} else {
+		packet = packets[header[0]]
+	}
 	if packet == nil {
 		return nil, 0, fmt.Errorf("packet id 0x%x invalid", header[0])
 	}
-	packetLen := binary.LittleEndian.Uint32(header[1:])
-	transactionID := binary.LittleEndian.Uint64(header[5:])
+	packetLen := int(binary.LittleEndian.Uint32(header[2:]))
+	transactionID := uint16(binary.LittleEndian.Uint16(header[6:]))
+	if packetLen == 0 {
+		return packet, transactionID, nil
+	}
 	if packetLen > 0x100000 {
 		return nil, 0, fmt.Errorf("packet too large")
 	}
-	packetBuf := make([]byte, packetLen)
-	if _, err := io.ReadFull(r, packetBuf); err != nil {
-		return nil, 0, err
+
+	var recvBuf []byte
+	if recvBufP != nil {
+		if cap(*recvBufP) >= int(packetLen) {
+			*recvBufP = (*recvBufP)[:packetLen]
+		} else {
+			*recvBufP = (*recvBufP)[:cap(*recvBufP)]
+			*recvBufP = append(*recvBufP, make([]byte, packetLen-len(*recvBufP))...)
+		}
+		if _, err := io.ReadFull(r, *recvBufP); err != nil {
+			return nil, 0, err
+		}
+		recvBuf = *recvBufP
+	} else {
+		recvBuf = make([]byte, packetLen)
+		if _, err := io.ReadFull(r, recvBuf); err != nil {
+			return nil, 0, err
+		}
 	}
-	if _, err := packet.ReadFrom(bytes.NewReader(packetBuf)); err != nil {
-		return nil, 0, err
-	}
-	return packet, int64(transactionID), nil
+	packet.Unmarshal(recvBuf)
+	return packet, transactionID, nil
 }
 
-func serializePacket(buf *bytes.Buffer, packet Packet, transactionID int64) error {
-	buf.Write([]byte{packet.ID()})
-	o := buf.Len()
-	buf.Write(make([]byte, 4)) // reserve space for length
-	binary.Write(buf, binary.LittleEndian, transactionID)
-	packetLen, err := packet.WriteTo(buf)
-	if err != nil {
-		return err
-	}
-	binary.LittleEndian.PutUint32(buf.Bytes()[o:], uint32(packetLen))
-	return err
+func serializePacket(b []byte, id uint8, packet Packet, transactionID uint16) []byte {
+	b = append(b, id)
+	b = append(b, []byte{0, 0, 0, 0, 0}...)
+	b = binary.LittleEndian.AppendUint16(b, transactionID)
+	b = packet.Marshal(b)
+	packetLen := len(b) - 8
+	binary.LittleEndian.PutUint32(b[2:], uint32(packetLen))
+	return b
 }

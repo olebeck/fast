@@ -32,6 +32,11 @@ func BenchmarkPushClientToServer(b *testing.B) {
 	pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
 
+	defer func() {
+		f, _ := os.Create("mem.pprof")
+		pprof.WriteHeapProfile(f)
+	}()
+
 	// Setup client
 	client, err := fast.NewPushClient("push://"+server.Address(), uuid.New())
 	if err != nil {
