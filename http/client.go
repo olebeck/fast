@@ -94,7 +94,6 @@ func (h *Client) NewConn(req *fasthttp.Request, timeout time.Duration) (*Conn, e
 func (h *Client) DoRetry(req *fasthttp.Request, res *fasthttp.Response, hc **Conn, statusCheck func(int) bool) error {
 	var err error
 	var t1 time.Time
-	count429 := 0
 	for retry := 0; retry < 8; retry++ {
 		if *hc == nil || (*hc).Closed() {
 			*hc, err = h.NewConn(req, 30*time.Second)
@@ -109,10 +108,9 @@ func (h *Client) DoRetry(req *fasthttp.Request, res *fasthttp.Response, hc **Con
 		if res.StatusCode() == 429 {
 			(*hc).Close()
 			*hc = nil
-			count429++
 			continue
 		}
-		if err == nil && statusCheck(res.StatusCode()) && count429 > 1 {
+		if err == nil && statusCheck(res.StatusCode()) {
 			err = &StatusError{i: (*hc).RequestsSent, url: req.URI().String(), status: res.StatusCode()}
 		}
 
