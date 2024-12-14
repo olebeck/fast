@@ -1,2 +1,3 @@
 stats.db
 cpu.pprof
+mem.pprof

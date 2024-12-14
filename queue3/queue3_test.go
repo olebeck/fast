@@ -1,4 +1,4 @@
-package fast_test
+package queue3_test
 
 import (
 	"fmt"
@@ -8,22 +8,20 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/olebeck/fast"
+	"github.com/olebeck/fast/queue3"
 )
 
 func BenchmarkPushClientToServer(b *testing.B) {
 	// Setup server
-	server, err := fast.NewPushServer("localhost:0")
+	server := queue3.NewServer("pw")
+	err := server.Listen("localhost:0")
 	if err != nil {
-		b.Fatalf("failed to start server: %v", err)
+		b.Fatal(err)
 	}
-	defer server.Close() // Ensure server is closed after benchmark
 
-	go server.Run()
-	go func() {
-		for range server.Push {
-		}
-	}()
+	go server.Process(func(sessionID uuid.UUID, data []byte) {
+
+	})
 
 	// Prepare sample data to push
 	data := []byte("test data")
@@ -38,7 +36,7 @@ func BenchmarkPushClientToServer(b *testing.B) {
 	}()
 
 	// Setup client
-	client, err := fast.NewPushClient("push://"+server.Address(), uuid.New())
+	client, err := queue3.NewClient("ws://pw@"+server.Address(), uuid.New())
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -53,22 +51,20 @@ func BenchmarkPushClientToServer(b *testing.B) {
 
 func TestPushClientToServer(b *testing.T) {
 	// Setup server
-	server, err := fast.NewPushServer("localhost:0")
+	server := queue3.NewServer("pw")
+	err := server.Listen("localhost:0")
 	if err != nil {
-		b.Fatalf("failed to start server: %v", err)
+		b.Fatal(err)
 	}
-	defer server.Close() // Ensure server is closed after benchmark
 
-	go server.Run()
-	go func() {
-		for range server.Push {
-		}
-	}()
+	go server.Process(func(sessionID uuid.UUID, data []byte) {
+
+	})
 
 	// Prepare sample data to push
 	data := []byte("test data")
 
-	client, err := fast.NewPushClient("push://"+server.Address(), uuid.New())
+	client, err := queue3.NewClient("ws://pw@"+server.Address(), uuid.New())
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -82,11 +78,11 @@ func TestPushClientToServer(b *testing.T) {
 }
 
 func TestServerThroughput(t *testing.T) {
-	server, err := fast.NewPushServer("localhost:1345")
+	server := queue3.NewServer("pw")
+	err := server.Listen("localhost:1345")
 	if err != nil {
-		t.Fatalf("failed to start server: %v", err)
+		t.Fatal(err)
 	}
-	defer server.Close() // Ensure server is closed after benchmark
 
 	var lastCount int
 	var count int
@@ -98,19 +94,15 @@ func TestServerThroughput(t *testing.T) {
 		}
 	}()
 
-	go func() {
-		for range server.Push {
-			count++
-		}
-	}()
-
-	server.Run()
+	server.Process(func(sessionID uuid.UUID, data []byte) {
+		count++
+	})
 }
 
 func TestClient(t *testing.T) {
 	data := []byte("test data")
 
-	client, err := fast.NewPushClient("push://localhost:1345", uuid.New())
+	client, err := queue3.NewClient("ws://pw@localhost:1345", uuid.New())
 	if err != nil {
 		t.Fatal(err)
 	}
